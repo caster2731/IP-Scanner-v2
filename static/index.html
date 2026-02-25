@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IP Scanner v2 - Web Discovery & Vulnerability Dashboard</title>
+    <meta name="description" content="ランダム/指定IPアドレスからWebサービスを発見し、脆弱性を診断するダッシュボード">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <!-- ヘッダー -->
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">
+                <span class="logo-icon">◉</span>
+                <h1>IP Scanner <span class="version">v2</span></h1>
+            </div>
+            <span class="subtitle">Web Discovery & Vulnerability Scanner</span>
+        </div>
+        <div class="header-right">
+            <div class="status-indicator" id="statusIndicator">
+                <span class="status-dot"></span>
+                <span class="status-text">待機中</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="main">
+        <!-- 統計カード -->
+        <section class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">🔍</div>
+                <div class="stat-info">
+                    <span class="stat-value" id="totalScanned">0</span>
+                    <span class="stat-label">スキャン数</span>
+                </div>
+            </div>
+            <div class="stat-card highlight">
+                <div class="stat-icon">🌐</div>
+                <div class="stat-info">
+                    <span class="stat-value" id="totalFound">0</span>
+                    <span class="stat-label">発見数</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">⚡</div>
+                <div class="stat-info">
+                    <span class="stat-value" id="scanRate">0</span>
+                    <span class="stat-label">スキャン/秒</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">⏱️</div>
+                <div class="stat-info">
+                    <span class="stat-value" id="elapsedTime">00:00</span>
+                    <span class="stat-label">経過時間</span>
+                </div>
+            </div>
+            <div class="stat-card vuln-stat">
+                <div class="stat-icon">🛡️</div>
+                <div class="stat-info">
+                    <span class="stat-value" id="vulnCount">0</span>
+                    <span class="stat-label">脆弱性検出</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- コントロールパネル -->
+        <section class="control-panel glass-card">
+            <h2 class="section-title">スキャン制御</h2>
+
+            <!-- スキャンモード切替 -->
+            <div class="mode-switcher">
+                <button class="mode-btn active" id="modeRandom" onclick="switchMode('random')">
+                    🎲 ランダムスキャン
+                </button>
+                <button class="mode-btn" id="modeTarget" onclick="switchMode('target')">
+                    🎯 指定IPスキャン
+                </button>
+            </div>
+
+            <!-- 指定IP入力エリア（初期非表示） -->
+            <div class="target-input-area" id="targetInputArea" style="display:none;">
+                <label class="control-label">スキャン対象IP</label>
+                <textarea id="targetIps" class="target-textarea"
+                    placeholder="例:&#10;1.1.1.1&#10;8.8.8.8, 8.8.4.4&#10;192.168.1.0/24&#10;http://example.com&#10;example.com"></textarea>
+                <span class="input-hint">単一IP、カンマ区切り、CIDR表記、URL、ドメイン名に対応</span>
+            </div>
+
+            <!-- ターゲット進捗バー（指定IPスキャン時） -->
+            <div class="target-progress" id="targetProgress" style="display:none;">
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="progressFill" style="width:0%"></div>
+                </div>
+                <span class="progress-text" id="progressText">0 / 0</span>
+            </div>
+
+            <div class="controls">
+                <div class="control-group">
+                    <label class="control-label">ポート選択</label>
+                    <div class="port-toggles">
+                        <label class="toggle-btn">
+                            <input type="checkbox" id="port80" value="80" checked>
+                            <span>80 (HTTP)</span>
+                        </label>
+                        <label class="toggle-btn">
+                            <input type="checkbox" id="port443" value="443" checked>
+                            <span>443 (HTTPS)</span>
+                        </label>
+                        <label class="toggle-btn">
+                            <input type="checkbox" id="port8080" value="8080">
+                            <span>8080</span>
+                        </label>
+                        <label class="toggle-btn">
+                            <input type="checkbox" id="port8443" value="8443">
+                            <span>8443</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <div class="option-toggles">
+                        <label class="toggle-btn screenshot-toggle">
+                            <input type="checkbox" id="takeScreenshots" checked>
+                            <span>📸 スクリーンショット</span>
+                        </label>
+                        <label class="toggle-btn vuln-toggle">
+                            <input type="checkbox" id="runVulnCheck" checked>
+                            <span>🛡️ 脆弱性スキャン</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="control-group actions">
+                    <button class="btn btn-start" id="btnStart" onclick="startScan()">
+                        <span class="btn-icon">▶</span> スキャン開始
+                    </button>
+                    <button class="btn btn-stop" id="btnStop" onclick="stopScan()" disabled>
+                        <span class="btn-icon">■</span> 停止
+                    </button>
+                    <button class="btn btn-clear" id="btnClear" onclick="clearResults()">
+                        <span class="btn-icon">🗑</span> 結果クリア
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- フィルター -->
+        <section class="filter-bar glass-card">
+            <div class="filter-group">
+                <input type="text" id="searchInput" class="search-input" placeholder="IP、タイトル、サーバーで検索..."
+                    oninput="debounceSearch()">
+            </div>
+            <div class="filter-group">
+                <select id="statusFilter" class="filter-select" onchange="loadResults()">
+                    <option value="">全ステータス</option>
+                    <option value="2xx">2xx 成功</option>
+                    <option value="3xx">3xx リダイレクト</option>
+                    <option value="4xx">4xx クライアントエラー</option>
+                    <option value="5xx">5xx サーバーエラー</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <select id="riskFilter" class="filter-select" onchange="loadResults()">
+                    <option value="">全リスク</option>
+                    <option value="has_vuln">脆弱性あり</option>
+                    <option value="critical">⛔ Critical</option>
+                    <option value="high">🔴 High</option>
+                    <option value="medium">🟡 Medium</option>
+                    <option value="low">🔵 Low</option>
+                </select>
+            </div>
+        </section>
+
+        <!-- 結果テーブル -->
+        <section class="results-section glass-card">
+            <div class="section-header">
+                <h2 class="section-title">発見されたWebサービス</h2>
+                <span class="result-count" id="resultCount">0 件</span>
+            </div>
+            <div class="table-wrapper">
+                <table class="results-table" id="resultsTable">
+                    <thead>
+                        <tr>
+                            <th>IP:ポート</th>
+                            <th>ステータス</th>
+                            <th>ホスト名</th>
+                            <th>国籍</th>
+                            <th>タイトル</th>
+                            <th>サーバー</th>
+                            <th>脆弱性</th>
+                            <th>SSL</th>
+                            <th>応答時間</th>
+                            <th>📸</th>
+                            <th>時刻</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsBody">
+                        <tr class="empty-row">
+                            <td colspan="11">
+                                <div class="empty-state">
+                                    <span class="empty-icon">🛰️</span>
+                                    <p>スキャンを開始すると、発見されたWebサービスがここに表示されます</p>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="pagination">
+                <button class="btn btn-page" id="btnPrev" onclick="prevPage()" disabled>← 前へ</button>
+                <span class="page-info" id="pageInfo">1 ページ</span>
+                <button class="btn btn-page" id="btnNext" onclick="nextPage()">次へ →</button>
+            </div>
+        </section>
+    </main>
+
+    <!-- スクリーンショット＋詳細モーダル -->
+    <div class="modal-overlay" id="screenshotModal" onclick="closeModal(event)">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal()">✕</button>
+            <div class="modal-header">
+                <h3 id="modalTitle">-</h3>
+                <p id="modalUrl" class="modal-url">-</p>
+            </div>
+            <div class="modal-body">
+                <img id="modalImage" src="" alt="スクリーンショット">
+            </div>
+            <div class="modal-details" id="modalDetails"></div>
+            <!-- 脆弱性詳細セクション -->
+            <div class="modal-vulns" id="modalVulns"></div>
+        </div>
+    </div>
+
+    <!-- スキャンアニメーション -->
+    <div class="scan-animation" id="scanAnimation">
+        <div class="scan-line"></div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>

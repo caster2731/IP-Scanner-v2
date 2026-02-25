@@ -1,0 +1,605 @@
+/**
+ * IPスキャナー v2 ダッシュボード フロントエンドロジック
+ * WebSocket接続、スキャン制御、結果表示、脆弱性表示、統計更新を担当
+ */
+
+// ========== 状態管理 ==========
+let ws = null;
+let isScanning = false;
+let currentPage = 1;
+const PAGE_SIZE = 50;
+let searchTimeout = null;
+let elapsedTimer = null;
+let scanStartTime = null;
+let currentMode = 'random';  // 'random' or 'target'
+
+// ========== WebSocket ==========
+
+function connectWebSocket() {
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+    ws.onopen = () => {
+        console.log('WebSocket 接続完了');
+    };
+
+    ws.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        handleWSMessage(message);
+    };
+
+    ws.onclose = () => {
+        console.log('WebSocket 切断 - 3秒後に再接続');
+        setTimeout(connectWebSocket, 3000);
+    };
+
+    ws.onerror = (error) => {
+        console.error('WebSocket エラー:', error);
+    };
+}
+
+function handleWSMessage(message) {
+    switch (message.type) {
+        case 'result':
+            addResultToTable(message.data);
+            break;
+        case 'status':
+            updateScanStatus(message.data);
+            break;
+    }
+}
+
+// ========== モード切替 ==========
+
+function switchMode(mode) {
+    currentMode = mode;
+    document.getElementById('modeRandom').classList.toggle('active', mode === 'random');
+    document.getElementById('modeTarget').classList.toggle('active', mode === 'target');
+    document.getElementById('targetInputArea').style.display = mode === 'target' ? 'block' : 'none';
+}
+
+// ========== スキャン制御 ==========
+
+async function startScan() {
+    const ports = [];
+    if (document.getElementById('port80').checked) ports.push(80);
+    if (document.getElementById('port443').checked) ports.push(443);
+    if (document.getElementById('port8080').checked) ports.push(8080);
+    if (document.getElementById('port8443').checked) ports.push(8443);
+
+    if (ports.length === 0) {
+        alert('少なくとも1つのポートを選択してください');
+        return;
+    }
+
+    const takeScreenshots = document.getElementById('takeScreenshots').checked;
+    const runVulnCheck = document.getElementById('runVulnCheck').checked;
+
+    try {
+        let response;
+        if (currentMode === 'target') {
+            // 指定IPスキャン
+            const targets = document.getElementById('targetIps').value.trim();
+            if (!targets) {
+                alert('スキャン対象のIPアドレスを入力してください');
+                return;
+            }
+            response = await fetch('/api/scan/target', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targets,
+                    ports,
+                    take_screenshots: takeScreenshots,
+                    run_vuln_check: runVulnCheck
+                })
+            });
+        } else {
+            // ランダムスキャン
+            response = await fetch('/api/scan/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ports,
+                    take_screenshots: takeScreenshots,
+                    run_vuln_check: runVulnCheck
+                })
+            });
+        }
+
+        if (response.ok) {
+            const data = await response.json();
+            isScanning = true;
+            scanStartTime = Date.now();
+            updateUIForScanning(true);
+            startElapsedTimer();
+            // 指定IPモードのプログレス表示
+            if (data.mode === 'target') {
+                document.getElementById('targetProgress').style.display = 'flex';
+                document.getElementById('progressText').textContent =
+                    `0 / ${data.total_scans}`;
+            }
+        } else {
+            const error = await response.json();
+            alert(error.error || 'スキャン開始に失敗しました');
+        }
+    } catch (e) {
+        alert('サーバーに接続できません');
+    }
+}
+
+async function stopScan() {
+    try {
+        const response = await fetch('/api/scan/stop', { method: 'POST' });
+        if (response.ok) {
+            isScanning = false;
+            updateUIForScanning(false);
+            stopElapsedTimer();
+        }
+    } catch (e) {
+        alert('停止に失敗しました');
+    }
+}
+
+async function clearResults() {
+    if (!confirm('全てのスキャン結果を削除しますか？')) return;
+
+    try {
+        await fetch('/api/results', { method: 'DELETE' });
+        document.getElementById('resultsBody').innerHTML = `
+            <tr class="empty-row">
+                <td colspan="11">
+                    <div class="empty-state">
+                        <span class="empty-icon">🛰️</span>
+                        <p>スキャンを開始すると、発見されたWebサービスがここに表示されます</p>
+                    </div>
+                </td>
+            </tr>
+        `;
+        document.getElementById('resultCount').textContent = '0 件';
+        document.getElementById('totalScanned').textContent = '0';
+        document.getElementById('totalFound').textContent = '0';
+        document.getElementById('vulnCount').textContent = '0';
+        currentPage = 1;
+        updatePagination();
+    } catch (e) {
+        alert('クリアに失敗しました');
+    }
+}
+
+// ========== UI更新 ==========
+
+function updateUIForScanning(scanning) {
+    const btnStart = document.getElementById('btnStart');
+    const btnStop = document.getElementById('btnStop');
+    const indicator = document.getElementById('statusIndicator');
+    const animation = document.getElementById('scanAnimation');
+    const statusText = indicator.querySelector('.status-text');
+
+    btnStart.disabled = scanning;
+    btnStop.disabled = !scanning;
+
+    if (scanning) {
+        indicator.classList.add('scanning');
+        animation.classList.add('active');
+        const modeText = currentMode === 'target' ? '指定IPスキャン中...' : 'ランダムスキャン中...';
+        statusText.textContent = modeText;
+    } else {
+        indicator.classList.remove('scanning');
+        animation.classList.remove('active');
+        statusText.textContent = '待機中';
+        document.getElementById('targetProgress').style.display = 'none';
+    }
+}
+
+function updateScanStatus(data) {
+    document.getElementById('totalScanned').textContent = formatNumber(data.total_scanned);
+    document.getElementById('totalFound').textContent = formatNumber(data.total_found);
+    document.getElementById('scanRate').textContent = formatNumber(data.current_rate);
+
+    // 指定IPモードの進捗バー
+    if (data.mode === 'target' && data.target_total > 0) {
+        const progress = document.getElementById('targetProgress');
+        progress.style.display = 'flex';
+        const pct = Math.round((data.target_done / data.target_total) * 100);
+        document.getElementById('progressFill').style.width = `${pct}%`;
+        document.getElementById('progressText').textContent =
+            `${data.target_done} / ${data.target_total} (${pct}%)`;
+    }
+
+    if (!data.running && isScanning) {
+        isScanning = false;
+        updateUIForScanning(false);
+        stopElapsedTimer();
+    }
+}
+
+function addResultToTable(result) {
+    const tbody = document.getElementById('resultsBody');
+
+    const emptyRow = tbody.querySelector('.empty-row');
+    if (emptyRow) emptyRow.remove();
+
+    const row = document.createElement('tr');
+    row.classList.add('new-row');
+    row.innerHTML = createResultRow(result);
+
+    tbody.insertBefore(row, tbody.firstChild);
+
+    while (tbody.children.length > PAGE_SIZE) {
+        tbody.removeChild(tbody.lastChild);
+    }
+
+    // 脆弱性カウント更新
+    if (result.vuln_count > 0) {
+        const el = document.getElementById('vulnCount');
+        const current = parseInt(el.textContent.replace(/,/g, '')) || 0;
+        el.textContent = formatNumber(current + result.vuln_count);
+    }
+
+    updateResultCount();
+}
+
+function createResultRow(r) {
+    const statusClass = getStatusClass(r.status_code);
+    const statusBadge = `<span class="status-badge ${statusClass}">${r.status_code}</span>`;
+
+    // 脆弱性バッジ
+    let vulnHtml = '<span class="vuln-none">✓</span>';
+    if (r.vuln_count > 0) {
+        const riskClass = `vuln-${r.vuln_max_risk || 'info'}`;
+        const riskIcon = getRiskIcon(r.vuln_max_risk);
+        vulnHtml = `<span class="vuln-badge ${riskClass}" onclick="showDetails(${r.id})" title="クリックで詳細表示">
+            ${riskIcon} ${r.vuln_count}件
+        </span>`;
+    }
+
+    // SSL表示
+    let sslHtml = '<span class="ssl-none">-</span>';
+    if (r.ssl_issuer || r.ssl_domain) {
+        const domain = r.ssl_domain || '-';
+        const issuer = r.ssl_issuer || '-';
+        sslHtml = `<span class="ssl-icon">🔒</span> <span title="発行者: ${escapeHtml(issuer)}">${escapeHtml(truncate(domain, 20))}</span>`;
+    }
+
+    // 応答時間
+    const timeClass = r.response_time_ms < 500 ? 'time-fast' :
+        r.response_time_ms < 2000 ? 'time-medium' : 'time-slow';
+    const timeHtml = `<span class="response-time ${timeClass}">${r.response_time_ms}ms</span>`;
+
+    // スクリーンショット
+    let screenshotHtml = '<span class="no-screenshot">-</span>';
+    if (r.screenshot_path) {
+        screenshotHtml = `<img class="screenshot-thumb"
+            src="/screenshots/${r.screenshot_path}"
+            alt="SS"
+            onclick="showDetails(${r.id})"
+            loading="lazy">`;
+    }
+
+    // 時刻
+    const time = r.scanned_at ? new Date(r.scanned_at).toLocaleTimeString('ja-JP') : '-';
+    const url = `${r.protocol}://${r.ip}:${r.port}`;
+
+    // ホスト名
+    const hostnameHtml = r.hostname
+        ? `<span class="hostname-cell" title="${escapeHtml(r.hostname)}">${escapeHtml(truncate(r.hostname, 25))}</span>`
+        : '<span class="text-muted">-</span>';
+
+    // 国旗 + 国名
+    let countryHtml = '<span class="text-muted">-</span>';
+    if (r.country_code) {
+        const flag = countryCodeToFlag(r.country_code);
+        countryHtml = `<span class="country-cell" title="${escapeHtml(r.country || '')}">${flag} ${escapeHtml(r.country_code)}</span>`;
+    }
+
+    return `
+        <td class="ip-cell"><a href="${url}" target="_blank" rel="noopener">${r.ip}:${r.port}</a></td>
+        <td>${statusBadge}</td>
+        <td class="hostname-col" title="${escapeHtml(r.hostname || '')}">${hostnameHtml}</td>
+        <td>${countryHtml}</td>
+        <td class="title-cell" title="${escapeHtml(r.title || '')}">${escapeHtml(r.title || '-')}</td>
+        <td class="server-cell" title="${escapeHtml(r.server || '')}">${escapeHtml(r.server || '-')}</td>
+        <td>${vulnHtml}</td>
+        <td class="ssl-cell">${sslHtml}</td>
+        <td>${timeHtml}</td>
+        <td>${screenshotHtml}</td>
+        <td class="time-cell">${time}</td>
+    `;
+}
+
+function getStatusClass(code) {
+    if (code >= 200 && code < 300) return 'status-2xx';
+    if (code >= 300 && code < 400) return 'status-3xx';
+    if (code >= 400 && code < 500) return 'status-4xx';
+    if (code >= 500) return 'status-5xx';
+    return '';
+}
+
+function getRiskIcon(risk) {
+    switch (risk) {
+        case 'critical': return '⛔';
+        case 'high': return '🔴';
+        case 'medium': return '🟡';
+        case 'low': return '🔵';
+        default: return 'ℹ️';
+    }
+}
+
+function countryCodeToFlag(code) {
+    // 国コード（2文字）をemoji国旗に変換
+    if (!code || code.length !== 2) return '🌐';
+    const codePoints = [...code.toUpperCase()].map(c => 0x1F1E6 + c.charCodeAt(0) - 65);
+    return String.fromCodePoint(...codePoints);
+}
+
+// ========== 結果読み込み ==========
+
+async function loadResults() {
+    const search = document.getElementById('searchInput').value;
+    const statusFilter = document.getElementById('statusFilter').value;
+    const riskFilter = document.getElementById('riskFilter').value;
+    const offset = (currentPage - 1) * PAGE_SIZE;
+
+    try {
+        const params = new URLSearchParams({ limit: PAGE_SIZE, offset });
+        if (search) params.append('search', search);
+        if (statusFilter) params.append('status_filter', statusFilter);
+        if (riskFilter) params.append('risk_filter', riskFilter);
+
+        const response = await fetch(`/api/results?${params}`);
+        const data = await response.json();
+
+        renderResults(data.results);
+        updateResultCount(data.count);
+        updatePagination();
+    } catch (e) {
+        console.error('結果の取得に失敗:', e);
+    }
+}
+
+function renderResults(results) {
+    const tbody = document.getElementById('resultsBody');
+
+    if (results.length === 0) {
+        tbody.innerHTML = `
+            <tr class="empty-row">
+                <td colspan="11">
+                    <div class="empty-state">
+                        <span class="empty-icon">🛰️</span>
+                        <p>条件に一致する結果がありません</p>
+                    </div>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = results.map(r => `<tr>${createResultRow(r)}</tr>`).join('');
+}
+
+function updateResultCount(count) {
+    if (count !== undefined) {
+        document.getElementById('resultCount').textContent = `${count} 件`;
+    } else {
+        const tbody = document.getElementById('resultsBody');
+        const rows = tbody.querySelectorAll('tr:not(.empty-row)').length;
+        document.getElementById('resultCount').textContent = `${rows} 件+`;
+    }
+}
+
+// ========== ページネーション ==========
+
+function prevPage() {
+    if (currentPage > 1) { currentPage--; loadResults(); }
+}
+function nextPage() {
+    currentPage++; loadResults();
+}
+function updatePagination() {
+    document.getElementById('btnPrev').disabled = currentPage <= 1;
+    document.getElementById('pageInfo').textContent = `${currentPage} ページ`;
+}
+
+// ========== 検索デバウンス ==========
+
+function debounceSearch() {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => { currentPage = 1; loadResults(); }, 400);
+}
+
+// ========== 経過時間タイマー ==========
+
+function startElapsedTimer() {
+    stopElapsedTimer();
+    elapsedTimer = setInterval(() => {
+        if (scanStartTime) {
+            const elapsed = Math.floor((Date.now() - scanStartTime) / 1000);
+            document.getElementById('elapsedTime').textContent = formatTime(elapsed);
+        }
+    }, 1000);
+}
+
+function stopElapsedTimer() {
+    if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+}
+
+// ========== 詳細モーダル（スクリーンショット＋脆弱性） ==========
+
+async function showDetails(resultId) {
+    try {
+        const response = await fetch(`/api/results/${resultId}`);
+        const result = await response.json();
+
+        document.getElementById('modalTitle').textContent = result.title || '(タイトルなし)';
+        document.getElementById('modalUrl').textContent = `${result.protocol}://${result.ip}:${result.port}`;
+
+        // スクリーンショット
+        const img = document.getElementById('modalImage');
+        if (result.screenshot_path) {
+            img.src = `/screenshots/${result.screenshot_path}`;
+            img.style.display = 'block';
+        } else {
+            img.style.display = 'none';
+        }
+
+        // 基本情報
+        let headersHtml = '';
+        if (result.headers) {
+            try {
+                const headers = JSON.parse(result.headers);
+                headersHtml = Object.entries(headers)
+                    .map(([k, v]) => `<strong>${escapeHtml(k)}:</strong> ${escapeHtml(v)}`)
+                    .join('<br>');
+            } catch (e) { }
+        }
+
+        document.getElementById('modalDetails').innerHTML = `
+            <div class="detail-item">
+                <div class="detail-label">ステータスコード</div>
+                <div class="detail-value">${result.status_code}</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">サーバー</div>
+                <div class="detail-value">${escapeHtml(result.server || '-')}</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">応答時間</div>
+                <div class="detail-value">${result.response_time_ms}ms</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">SSL発行者</div>
+                <div class="detail-value">${escapeHtml(result.ssl_issuer || '-')}</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">SSL有効期限</div>
+                <div class="detail-value">${escapeHtml(result.ssl_expiry || '-')}</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">SSLドメイン</div>
+                <div class="detail-value">${escapeHtml(result.ssl_domain || '-')}</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">ホスト名（逆引きDNS）</div>
+                <div class="detail-value">${escapeHtml(result.hostname || '-')}</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">国籍</div>
+                <div class="detail-value">${result.country_code ? countryCodeToFlag(result.country_code) + ' ' : ''}${escapeHtml(result.country || '-')} ${result.country_code ? '(' + escapeHtml(result.country_code) + ')' : ''}</div>
+            </div>
+            ${headersHtml ? `
+            <div class="detail-item" style="grid-column: span 2">
+                <div class="detail-label">レスポンスヘッダー</div>
+                <div class="detail-value">${headersHtml}</div>
+            </div>
+            ` : ''}
+        `;
+
+        // 脆弱性詳細
+        const vulnsDiv = document.getElementById('modalVulns');
+        if (result.vulnerabilities) {
+            try {
+                const vulns = JSON.parse(result.vulnerabilities);
+                if (vulns.length > 0) {
+                    vulnsDiv.innerHTML = `
+                        <div class="vuln-section-title">🛡️ 脆弱性診断結果（${vulns.length}件）</div>
+                        <div class="vuln-list">
+                            ${vulns.map(v => `
+                                <div class="vuln-item risk-${v.risk}">
+                                    <div class="vuln-item-header">
+                                        <span class="vuln-item-name">${escapeHtml(v.name)}</span>
+                                        <span class="vuln-risk-tag ${v.risk}">${v.risk.toUpperCase()}</span>
+                                    </div>
+                                    <div class="vuln-item-desc">${escapeHtml(v.description)}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                } else {
+                    vulnsDiv.innerHTML = '';
+                }
+            } catch (e) {
+                vulnsDiv.innerHTML = '';
+            }
+        } else {
+            vulnsDiv.innerHTML = '';
+        }
+
+        document.getElementById('screenshotModal').classList.add('active');
+    } catch (e) {
+        console.error('詳細取得に失敗:', e);
+    }
+}
+
+// showScreenshot を showDetails に統合（後方互換）
+function showScreenshot(resultId) {
+    showDetails(resultId);
+}
+
+function closeModal(event) {
+    if (event && event.target !== event.currentTarget) return;
+    document.getElementById('screenshotModal').classList.remove('active');
+}
+
+// ========== ユーティリティ ==========
+
+function formatNumber(num) {
+    return num.toLocaleString('ja-JP');
+}
+
+function formatTime(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+}
+
+function truncate(str, max) {
+    if (!str) return '';
+    return str.length > max ? str.substring(0, max) + '...' : str;
+}
+
+// ========== 初期化 ==========
+
+document.addEventListener('DOMContentLoaded', () => {
+    connectWebSocket();
+    loadResults();
+    checkScanStatus();
+    loadVulnStats();
+});
+
+async function checkScanStatus() {
+    try {
+        const response = await fetch('/api/scan/status');
+        const data = await response.json();
+        if (data.running) {
+            isScanning = true;
+            currentMode = data.mode || 'random';
+            scanStartTime = Date.now() - (data.elapsed_seconds * 1000);
+            updateUIForScanning(true);
+            startElapsedTimer();
+            updateScanStatus(data);
+        }
+    } catch (e) { }
+}
+
+async function loadVulnStats() {
+    try {
+        const response = await fetch('/api/stats');
+        const stats = await response.json();
+        if (stats.vuln_stats) {
+            document.getElementById('vulnCount').textContent =
+                formatNumber(stats.vuln_stats.total_findings || 0);
+        }
+    } catch (e) { }
+}
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeModal();
+});
