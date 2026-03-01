@@ -13,6 +13,8 @@ let elapsedTimer = null;
 let scanStartTime = null;
 let currentMode = 'random';  // 'random' or 'target'
 let currentResults = []; // 現在画面に表示中のデータ保持用
+let threatMap = null;
+let mapMarkers = [];
 
 // ========== WebSocket ==========
 
@@ -245,9 +247,11 @@ function addResultToTable(result) {
         currentResults.pop();
     }
 
-    // ギャラリービュー表示中の場合はギャラリーも更新
+    // ギャラリービューやマップ表示中の場合はそちらも更新
     if (currentView === 'gallery') {
         renderResults(currentResults);
+    } else if (currentView === 'map') {
+        renderMapMarkers(currentResults);
     }
 
     // 脆弱性カウント更新
@@ -272,6 +276,10 @@ function createResultRow(r) {
         vulnHtml = `<span class="vuln-badge ${riskClass}" onclick="showDetails(${r.id})" title="クリックで詳細表示">
             ${riskIcon} ${r.vuln_count}件
         </span>`;
+    }
+    if (r.cve_list) {
+        const cveCount = r.cve_list.split(',').length;
+        vulnHtml += `<div style="margin-top: 4px;"><span class="vuln-badge vuln-critical" style="font-size: 10px; padding: 2px 4px; opacity: 0.9;" onclick="showDetails(${r.id})" title="${escapeHtml(r.cve_list)}">👾 CVE (${cveCount})</span></div>`;
     }
 
     // SSL表示
@@ -323,8 +331,13 @@ function createResultRow(r) {
         countryHtml = `<span class="country-cell" title="${escapeHtml(r.country || '')}">${flag} ${escapeHtml(r.country_code)}</span>`;
     }
 
+    let honeypotBadge = '';
+    if (r.is_honeypot) {
+        honeypotBadge = `<div style="color: var(--accent-orange); font-size: 10px; font-weight: bold; margin-bottom: 2px;" title="ハニーポットの疑い">⚠️ 罠サーバー</div>`;
+    }
+
     return `
-        <td class="ip-cell"><a href="${url}" target="_blank" rel="noopener">${r.ip}:${r.port}</a></td>
+        <td class="ip-cell">${honeypotBadge}<a href="${url}" target="_blank" rel="noopener">${r.ip}:${r.port}</a></td>
         <td>${statusBadge}</td>
         <td class="hostname-col" title="${escapeHtml(r.hostname || '')}">${hostnameHtml}</td>
         <td>${countryHtml}</td>
@@ -416,8 +429,10 @@ function switchView(viewMode) {
     currentView = viewMode;
     document.getElementById('btnTableView').classList.toggle('active', viewMode === 'table');
     document.getElementById('btnGalleryView').classList.toggle('active', viewMode === 'gallery');
+    document.getElementById('btnMapView').classList.toggle('active', viewMode === 'map');
     document.getElementById('tableWrapper').style.display = viewMode === 'table' ? 'block' : 'none';
     document.getElementById('galleryWrapper').style.display = viewMode === 'gallery' ? 'block' : 'none';
+    document.getElementById('mapWrapper').style.display = viewMode === 'map' ? 'block' : 'none';
 
     // 現在の結果で再描画
     if (currentResults.length > 0) {
@@ -444,13 +459,16 @@ function renderResults(results) {
             </tr>
         `;
         galleryGrid.innerHTML = emptyHtml;
+        if (typeof renderMapMarkers === 'function') renderMapMarkers([]);
         return;
     }
 
     if (currentView === 'table') {
         tbody.innerHTML = results.map(r => `<tr>${createResultRow(r)}</tr>`).join('');
-    } else {
+    } else if (currentView === 'gallery') {
         galleryGrid.innerHTML = results.map(r => createGalleryCard(r)).join('');
+    } else if (currentView === 'map') {
+        renderMapMarkers(results);
     }
 }
 
@@ -477,6 +495,10 @@ function createGalleryCard(r) {
         const riskIcon = getRiskIcon(r.vuln_max_risk);
         vulnIconHtml = `<span title="脆弱性 ${r.vuln_count}件" style="color: var(--risk-${r.vuln_max_risk || 'info'}); cursor: pointer;" onclick="showDetails(${r.id})">${riskIcon} ${r.vuln_count}</span>`;
     }
+    if (r.cve_list) {
+        const cveCount = r.cve_list.split(',').length;
+        vulnIconHtml += `<span title="${escapeHtml(r.cve_list)}" style="color: var(--accent-red); margin-left: 8px; font-weight: bold; cursor: pointer;" onclick="showDetails(${r.id})">👾 CVE (${cveCount})</span>`;
+    }
 
     // 国旗
     let flagHtml = '';
@@ -498,6 +520,11 @@ function createGalleryCard(r) {
         `;
     }
 
+    let honeypotBadge = '';
+    if (r.is_honeypot) {
+        honeypotBadge = `<span style="color: var(--accent-orange); font-size: 11px; margin-right: 4px;" title="ハニーポットの疑い">⚠️</span>`;
+    }
+
     return `
         <div class="gallery-card">
             <div class="gallery-card-img">
@@ -506,7 +533,7 @@ function createGalleryCard(r) {
             <div class="gallery-card-content">
                 <div class="gallery-card-header">
                     <a href="${r.protocol}://${r.ip}:${r.port}" target="_blank" class="gallery-card-ip" style="text-decoration:none;">
-                        ${r.ip}:${r.port}
+                        ${honeypotBadge}${r.ip}:${r.port}
                     </a>
                     <span class="status-badge ${statusClass}" style="transform: scale(0.85); transform-origin: right;">${r.status_code}</span>
                 </div>
@@ -591,7 +618,13 @@ async function showDetails(resultId) {
         const response = await fetch(`/api/results/${resultId}`);
         const result = await response.json();
 
-        document.getElementById('modalTitle').textContent = result.title || '(タイトルなし)';
+        const titleEl = document.getElementById('modalTitle');
+        titleEl.textContent = result.title || '(タイトルなし)';
+        titleEl.style.color = result.is_honeypot ? 'var(--accent-orange)' : '';
+        if (result.is_honeypot) {
+            titleEl.textContent = '⚠️ 罠サーバー (Honeypot) - ' + titleEl.textContent;
+        }
+
         document.getElementById('modalUrl').textContent = `${result.protocol}://${result.ip}:${result.port}`;
 
         // スクリーンショット
@@ -667,7 +700,7 @@ async function showDetails(resultId) {
                             ${vulns.map(v => `
                                 <div class="vuln-item risk-${v.risk}">
                                     <div class="vuln-item-header">
-                                        <span class="vuln-item-name">${escapeHtml(v.name)}</span>
+                                        <span class="vuln-item-name">${v.type === 'cve_match' ? '👾 ' : ''}${escapeHtml(v.name)}</span>
                                         <span class="vuln-risk-tag ${v.risk}">${v.risk.toUpperCase()}</span>
                                     </div>
                                     <div class="vuln-item-desc">${escapeHtml(v.description)}</div>
@@ -689,6 +722,58 @@ async function showDetails(resultId) {
     } catch (e) {
         console.error('詳細取得に失敗:', e);
     }
+}
+
+// ========== Threat Map (Leaflet) ==========
+
+function initMap() {
+    if (threatMap) return;
+    threatMap = L.map('threatMap').setView([20, 0], 2);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; CARTO',
+        subdomains: 'abcd',
+        maxZoom: 20
+    }).addTo(threatMap);
+}
+
+function renderMapMarkers(results) {
+    if (!threatMap) initMap();
+
+    // 既存のマーカーをクリア
+    mapMarkers.forEach(m => threatMap.removeLayer(m));
+    mapMarkers = [];
+
+    results.forEach(r => {
+        if (r.latitude && r.longitude) {
+            let color = '#3b82f6'; // default low (ブルー)
+            if (r.vuln_max_risk === 'critical') color = '#dc2626';
+            else if (r.vuln_max_risk === 'high') color = '#ef4444';
+            else if (r.vuln_max_risk === 'medium') color = '#f59e0b';
+
+            const circle = L.circleMarker([r.latitude, r.longitude], {
+                radius: 6,
+                fillColor: color,
+                color: '#fff',
+                weight: 1,
+                opacity: 0.8,
+                fillOpacity: 0.8
+            }).addTo(threatMap);
+
+            circle.bindPopup(`
+                <div style="font-family: var(--font-sans); color: var(--text-primary); font-size: 13px;">
+                    <b style="color: var(--accent-primary);">${r.ip}:${r.port}</b><br>
+                    ${r.status_code} ${escapeHtml(r.title || '')}<br>
+                    <button onclick="showDetails(${r.id})" style="margin-top: 8px; cursor: pointer; padding: 4px 8px; background: var(--bg-input); border: 1px solid var(--border-subtle); color: var(--text-primary); border-radius: 4px;">詳細を見る</button>
+                </div>
+            `);
+            mapMarkers.push(circle);
+        }
+    });
+
+    // コンテナが表示されたときにサイズを再計算
+    setTimeout(() => {
+        threatMap.invalidateSize();
+    }, 100);
 }
 
 // showScreenshot を showDetails に統合（後方互換）

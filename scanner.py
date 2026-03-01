@@ -14,9 +14,9 @@ import socket
 import ipaddress
 from datetime import datetime
 from ip_generator import generate_random_ip
-from database import save_result
+from database import save_result, is_recently_scanned
 from screenshot import take_screenshot
-from vuln_scanner import run_vuln_scan, summarize_vulns, extract_tech_stack
+from vuln_scanner import run_vuln_scan, summarize_vulns, extract_tech_stack, match_cves, check_honeypot
 
 # スキャンの状態を管理する辞書
 scan_state = {
@@ -123,11 +123,11 @@ async def reverse_dns_lookup(ip: str) -> str | None:
 
 
 async def get_country_info(session: aiohttp.ClientSession, ip: str) -> dict:
-    """ip-api.comを使ってIPアドレスの国籍情報を取得する"""
-    info = {"country": None, "country_code": None}
+    """ip-api.comを使ってIPアドレスの国籍、座標を取得する"""
+    info = {"country": None, "country_code": None, "lat": None, "lon": None}
     try:
         async with session.get(
-            f"http://ip-api.com/json/{ip}?fields=country,countryCode",
+            f"http://ip-api.com/json/{ip}?fields=country,countryCode,lat,lon",
             timeout=aiohttp.ClientTimeout(total=5),
             ssl=False
         ) as resp:
@@ -135,6 +135,8 @@ async def get_country_info(session: aiohttp.ClientSession, ip: str) -> dict:
                 data = await resp.json()
                 info["country"] = data.get("country")
                 info["country_code"] = data.get("countryCode")
+                info["lat"] = data.get("lat")
+                info["lon"] = data.get("lon")
     except Exception:
         pass
     return info
@@ -148,7 +150,13 @@ async def scan_single_ip(session: aiohttp.ClientSession, ip: str, port: int,
     1つのIP:ポートをスキャンする。
     Webサービスが見つかった場合、結果を辞書で返す。
     非Webポート(21, 22, 3389等)のバナー取得も行う。
+    
+    ※ 過去24時間以内にスキャン済みの場合はスキップする (Noneを返す)
     """
+    # 重複スキャンの防止（24時間以内ならスキップ）
+    if await is_recently_scanned(ip, port, hours=24):
+        return None
+
     # 非Webポートの判定
     is_web = port not in [21, 22, 3389]
     protocol = "https" if port in (443, 8443) else "http"
@@ -238,14 +246,19 @@ async def scan_single_ip(session: aiohttp.ClientSession, ip: str, port: int,
             if isinstance(hostname, Exception):
                 hostname = None
             if isinstance(country_info, Exception):
-                country_info = {"country": None, "country_code": None}
+                country_info = {"country": None, "country_code": None, "lat": None, "lon": None}
 
             # 脆弱性スキャン
             vuln_data = None
             vuln_count = 0
             vuln_max_risk = "info"
+            cve_list_names = None
+            is_honeypot = False
+            
             if run_vuln_check:
                 try:
+                    is_honeypot = check_honeypot(dict(response.headers), body)
+                    
                     findings = await run_vuln_scan(
                         session, url,
                         dict(response.headers),
@@ -257,10 +270,32 @@ async def scan_single_ip(session: aiohttp.ClientSession, ip: str, port: int,
                         vuln_count = vuln_summary["total"]
                         vuln_max_risk = vuln_summary["max_risk"]
                         
-                        # 脆弱性スキャン内で検出された技術スタックを抽出して結合
                         detected_techs = extract_tech_stack(findings)
                         if detected_techs:
                             tech_stack.extend(detected_techs)
+                            
+                except Exception:
+                    pass
+
+            if run_vuln_check and tech_stack:
+                try:
+                    cve_matches = match_cves(tech_stack)
+                    if cve_matches:
+                        old_findings = []
+                        if vuln_data:
+                            old_findings = json.loads(vuln_data)
+                        old_findings.extend(cve_matches)
+                        
+                        vuln_summary = summarize_vulns(old_findings)
+                        vuln_data = json.dumps(old_findings, ensure_ascii=False)
+                        vuln_count = vuln_summary["total"]
+                        vuln_max_risk = vuln_summary["max_risk"]
+                        
+                        cve_set = []
+                        for c in cve_matches:
+                            if c["name"] not in cve_set:
+                                cve_set.append(c["name"])
+                        cve_list_names = ", ".join(cve_set) if cve_set else None
                 except Exception:
                     pass
 
@@ -282,6 +317,8 @@ async def scan_single_ip(session: aiohttp.ClientSession, ip: str, port: int,
                 "hostname": hostname,
                 "country": country_info.get("country"),
                 "country_code": country_info.get("country_code"),
+                "latitude": country_info.get("lat"),
+                "longitude": country_info.get("lon"),
                 "screenshot_path": screenshot_path,
                 "response_time_ms": elapsed_ms,
                 "headers": json.dumps(important_headers, ensure_ascii=False),
@@ -289,6 +326,8 @@ async def scan_single_ip(session: aiohttp.ClientSession, ip: str, port: int,
                 "vuln_count": vuln_count,
                 "vuln_max_risk": vuln_max_risk,
                 "tech_stack": ", ".join(tech_stack) if tech_stack else None,
+                "cve_list": cve_list_names,
+                "is_honeypot": is_honeypot,
                 "scanned_at": datetime.now().isoformat(),
             }
 

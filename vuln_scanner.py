@@ -259,6 +259,53 @@ def extract_tech_stack(findings: list[dict]) -> list[str]:
             techs.append(f["name"])
     return techs
 
+# ========== CVE（共通脆弱性識別子）マッチング ==========
+
+# 簡易的なCVEデータベース（デモ用）
+CVE_DB = {
+    "apache": [
+        {"version_match": r"^2\.4\.(49|50)$", "cve": "CVE-2021-41773 / CVE-2021-42013", "description": "Apache HTTP Server パストラバーサル/RCE", "risk": "critical"},
+        {"version_match": r"^2\.4\.(0|1|2|3|4|5|6|7|8|9|10|12|14|16|18|20|23|25|27|29|33|34|35|37|38|39|41|43|46|48)$", "cve": "Multiple Old CVEs", "description": "古いApacheバージョン（多数の既知の脆弱性）", "risk": "high"}
+    ],
+    "nginx": [
+        {"version_match": r"^1\.20\.0$", "cve": "CVE-2021-23017", "description": "Nginx DNSリゾルバのオーバーフロー", "risk": "high"},
+        {"version_match": r"^1\.(0|1|2|3|4|5|6|7|8|9|10|12|14|16|18)\.", "cve": "Multiple Old CVEs", "description": "古いNginxバージョン（既知の脆弱性）", "risk": "medium"}
+    ],
+    "php": [
+        {"version_match": r"^8\.1\.0-dev$", "cve": "CVE-2021-3156", "description": "PHP 8.1.0-dev バックドア", "risk": "critical"},
+        {"version_match": r"^(5\.|7\.[0-3]\.)", "cve": "EOL PHP Version", "description": "サポート終了の古いPHPバージョン", "risk": "high"}
+    ],
+    "wordpress": [
+        {"version_match": r"^(4\.|5\.[0-7]\.)", "cve": "Multiple WP CVEs", "description": "古いWordPress（脆弱性の可能性大）", "risk": "high"}
+    ],
+    "openssh": [
+        {"version_match": r"^([1-8]\.|9\.0|9\.1|9\.2)(p\d+)?$", "cve": "CVE-2024-6387", "description": "OpenSSH regreSSHion (RCE)", "risk": "critical"}
+    ]
+}
+
+def match_cves(tech_stack: list[str]) -> list[dict]:
+    """検出された技術スタック（ソフトウェア名＋バージョン）からCVEを検索する"""
+    cve_findings = []
+    
+    for tech in tech_stack:
+        parts = tech.split(" ", 1)
+        if len(parts) == 2:
+            software = parts[0].lower()
+            version = parts[1]
+            
+            if software in CVE_DB:
+                for entry in CVE_DB[software]:
+                    if re.match(entry["version_match"], version):
+                        cve_findings.append({
+                            "type": "cve_match",
+                            "name": entry["cve"],
+                            "description": f"[{tech}] {entry['description']}",
+                            "risk": entry["risk"],
+                            "software": software,
+                            "version": version
+                        })
+    return cve_findings
+
 # ========== SSL/TLS 脆弱性チェック ==========
 
 def check_ssl_issues(ssl_info: dict, protocol: str) -> list[dict]:
@@ -366,3 +413,30 @@ def summarize_vulns(findings: list[dict]) -> dict:
         "risk_counts": risk_counts,
         "max_risk": max_risk,
     }
+
+# ========== ハニーポット検知 ==========
+
+HONEYPOT_SIGNATURES = [
+    "dionaea",
+    "cowrie",
+    "honeyd",
+    "glastopf",
+    "nepenthes",
+    "kippo",
+    "conpot",
+]
+
+def check_honeypot(headers: dict, body: str) -> bool:
+    """ハニーポット特有の振る舞いを簡易的に判定する"""
+    server = headers.get("Server", "").lower()
+    
+    # 既知のハニーポットソフトウェア名がサーバーヘッダに含まれているか
+    for sig in HONEYPOT_SIGNATURES:
+        if sig in server:
+            return True
+            
+    # その他よくあるハニーポットの特徴
+    if "honeypot" in server:
+        return True
+        
+    return False

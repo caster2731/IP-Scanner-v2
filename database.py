@@ -37,7 +37,11 @@ async def init_db():
                 hostname TEXT,
                 country TEXT,
                 country_code TEXT,
+                latitude REAL,
+                longitude REAL,
                 tech_stack TEXT,
+                cve_list TEXT,
+                is_honeypot BOOLEAN DEFAULT 0,
                 scanned_at TEXT NOT NULL
             )
         """)
@@ -81,6 +85,22 @@ async def init_db():
             await db.execute("ALTER TABLE scan_results ADD COLUMN tech_stack TEXT")
         except Exception:
             pass
+        try:
+            await db.execute("ALTER TABLE scan_results ADD COLUMN latitude REAL")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE scan_results ADD COLUMN longitude REAL")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE scan_results ADD COLUMN cve_list TEXT")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE scan_results ADD COLUMN is_honeypot BOOLEAN DEFAULT 0")
+        except Exception:
+            pass
 
         await db.commit()
 
@@ -93,8 +113,9 @@ async def save_result(result: dict) -> int:
             (ip, port, protocol, status_code, title, server, 
              ssl_issuer, ssl_expiry, ssl_domain, screenshot_path, 
              response_time_ms, headers, vulnerabilities, vuln_count, 
-             vuln_max_risk, hostname, country, country_code, tech_stack, scanned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             vuln_max_risk, hostname, country, country_code, tech_stack,
+             latitude, longitude, cve_list, is_honeypot, scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             result.get("ip"),
             result.get("port"),
@@ -115,6 +136,10 @@ async def save_result(result: dict) -> int:
             result.get("country"),
             result.get("country_code"),
             result.get("tech_stack"),
+            result.get("latitude"),
+            result.get("longitude"),
+            result.get("cve_list"),
+            result.get("is_honeypot", False),
             result.get("scanned_at", datetime.now().isoformat()),
         ))
         await db.commit()
@@ -254,3 +279,19 @@ async def get_result_by_id(result_id: int) -> dict | None:
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+async def is_recently_scanned(ip: str, port: int, hours: int = 24) -> bool:
+    """指定されたIPとポートが過去N時間以内にスキャン済みかどうか判定する"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # datetime("now", "-N hours") というSQLite関数を利用
+        query = """
+            SELECT 1 FROM scan_results
+            WHERE ip = ? AND port = ? 
+            AND scanned_at >= datetime('now', ?)
+            LIMIT 1
+        """
+        modifier = f"-{hours} hours"
+        async with db.execute(query, (ip, port, modifier)) as cursor:
+            row = await cursor.fetchone()
+            return row is not None
+

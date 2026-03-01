@@ -1396,6 +1396,23 @@ body::before {
     }
 }
 
+/* === Leaflet Map カスタマイズ === */
+.leaflet-container {
+    background: var(--bg-primary) !important;
+    font-family: var(--font-sans) !important;
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+}
+
+.leaflet-popup-content b {
+    color: var(--accent-primary);
+}
+
 /* === スクロールバー === */
 ::-webkit-scrollbar {
     width: 8px;

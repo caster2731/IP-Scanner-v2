@@ -25,6 +25,7 @@ from scanner import (
     ws_connections, reset_scan_state
 )
 from screenshot import init_screenshot_dir, SCREENSHOT_DIR
+from report_generator import generate_pdf_report
 
 
 # ========== ライフサイクル管理 ==========
@@ -363,6 +364,26 @@ async def export_html(
         iter([html_content]), 
         media_type="text/html",
         headers={"Content-Disposition": "attachment; filename=ipscan_report.html"}
+    )
+
+
+@app.get("/api/export/pdf")
+async def export_pdf(
+    status_filter: str = Query(default=None),
+    search: str = Query(default=None),
+    risk_filter: str = Query(default=None),
+):
+    """スキャン結果をPDFレポート形式でエクスポートする"""
+    results = await get_results(limit=None, status_filter=status_filter, search=search, risk_filter=risk_filter)
+    
+    filepath = await generate_pdf_report(results)
+    if not filepath or not os.path.exists(filepath):
+        return JSONResponse(status_code=500, content={"error": "PDFの生成に失敗しました (Playwrightがインストールされていない可能性があります)"})
+        
+    return FileResponse(
+        filepath,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={os.path.basename(filepath)}"}
     )
 
 
