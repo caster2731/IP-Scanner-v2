@@ -6,11 +6,18 @@ FastAPIによるWebサーバー。REST API、WebSocket、静的ファイル配�
 
 import asyncio
 import os
+import csv
+import io
+import json
+import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 from database import init_db, get_results, get_stats, clear_results, get_result_by_id
 from scanner import (
@@ -55,6 +62,7 @@ class ScanStartRequest(BaseModel):
     ports: list[int] = [80, 443]
     take_screenshots: bool = True
     run_vuln_check: bool = True
+    search_regex: str | None = None
 
 
 class TargetScanRequest(BaseModel):
@@ -63,6 +71,8 @@ class TargetScanRequest(BaseModel):
     ports: list[int] = [80, 443]
     take_screenshots: bool = True
     run_vuln_check: bool = True
+    search_regex: str | None = None
+    enumerate_subdomains: bool = False
 
 
 # ========== ページ配信 ==========
@@ -99,7 +109,7 @@ async def start_scan(request: ScanStartRequest):
     scan_state["start_time"] = time.time()
 
     asyncio.create_task(scan_worker(
-        valid_ports, request.take_screenshots, request.run_vuln_check
+        valid_ports, request.take_screenshots, request.run_vuln_check, request.search_regex
     ))
 
     return {"status": "started", "mode": "random", "ports": valid_ports}
@@ -115,14 +125,14 @@ async def start_target_scan(request: TargetScanRequest):
         )
 
     # IPリストを生成
-    target_ips = parse_target_ips(request.targets)
+    target_ips = parse_target_ips(request.targets, request.enumerate_subdomains)
     if not target_ips:
         return JSONResponse(
             status_code=400,
             content={"error": "有効なIPアドレスが見つかりません。形式: 1.1.1.1 / 1.1.1.1,8.8.8.8 / 192.168.0.0/24"}
         )
 
-    valid_ports = [p for p in request.ports if p in (80, 443, 8080, 8443)]
+    valid_ports = [p for p in request.ports if p in (80, 443, 8080, 8443, 21, 22, 3389)]
     if not valid_ports:
         return JSONResponse(
             status_code=400,
@@ -145,7 +155,7 @@ async def start_target_scan(request: TargetScanRequest):
     scan_state["start_time"] = time.time()
 
     asyncio.create_task(scan_target_worker(
-        target_ips, valid_ports, request.take_screenshots, request.run_vuln_check
+        target_ips, valid_ports, request.take_screenshots, request.run_vuln_check, request.search_regex
     ))
 
     return {
@@ -221,6 +231,139 @@ async def api_clear_results():
     """全スキャン結果を削除する"""
     await clear_results()
     return {"status": "cleared"}
+
+
+@app.get("/api/export/csv")
+async def export_csv(
+    status_filter: str = Query(default=None),
+    search: str = Query(default=None),
+    risk_filter: str = Query(default=None),
+):
+    """スキャン結果をCSV形式でエクスポートする"""
+    results = await get_results(limit=None, status_filter=status_filter, search=search, risk_filter=risk_filter)
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # ヘッダー行
+    headers = [
+        "ID", "IP", "Port", "Protocol", "Status Code", "Title", "Server", 
+        "Hostname", "Country", "Country Code", "Response Time (ms)",
+        "Vulnerability Count", "Max Risk", "Scanned At",
+        "SSL Issuer", "SSL Expiry", "SSL Domain"
+    ]
+    writer.writerow(headers)
+    
+    # データ行
+    for r in results:
+        writer.writerow([
+            r.get("id"), r.get("ip"), r.get("port"), r.get("protocol"), r.get("status_code"),
+            r.get("title"), r.get("server"), r.get("hostname"), r.get("country"), r.get("country_code"),
+            r.get("response_time_ms"), r.get("vuln_count"), r.get("vuln_max_risk"), r.get("scanned_at"),
+            r.get("ssl_issuer"), r.get("ssl_expiry"), r.get("ssl_domain")
+        ])
+        
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]), 
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=ipscan_results.csv"}
+    )
+
+
+@app.get("/api/export/json")
+async def export_json(
+    status_filter: str = Query(default=None),
+    search: str = Query(default=None),
+    risk_filter: str = Query(default=None),
+):
+    """スキャン結果をJSON形式でエクスポートする"""
+    results = await get_results(limit=None, status_filter=status_filter, search=search, risk_filter=risk_filter)
+    
+    # 整形して出力
+    json_data = json.dumps(results, ensure_ascii=False, indent=2)
+    
+    return StreamingResponse(
+        iter([json_data]), 
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=ipscan_results.json"}
+    )
+
+
+@app.get("/api/export/html")
+async def export_html(
+    status_filter: str = Query(default=None),
+    search: str = Query(default=None),
+    risk_filter: str = Query(default=None),
+):
+    """スキャン結果をHTMLレポート形式でエクスポートする"""
+    from jinja2 import Template
+    from datetime import datetime
+    
+    results = await get_results(limit=None, status_filter=status_filter, search=search, risk_filter=risk_filter)
+    
+    # 簡易なHTMLテンプレートを用意（フロントエンド側で動的に作ることも可能ですが、バックエンド生成とします）
+    html_template = """
+    <!DOCTYPE html>
+    <html lang="ja">
+    <head>
+        <meta charset="UTF-8">
+        <title>IP Scanner v2 - Scan Report</title>
+        <style>
+            body { font-family: sans-serif; margin: 20px; color: #333; }
+            h1 { color: #0056b3; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+            th { background-color: #f4f4f4; }
+            tr:nth-child(even) { background-color: #f9f9f9; }
+            .critical { color: #dc3545; font-weight: bold; }
+            .high { color: #fd7e14; font-weight: bold; }
+            .medium { color: #ffc107; font-weight: bold; }
+            .low { color: #17a2b8; font-weight: bold; }
+        </style>
+    </head>
+    <body>
+        <h1>IP Scanner v2 Report</h1>
+        <p><strong>Generated At:</strong> {{ generated_at }}</p>
+        <p><strong>Total Results:</strong> {{ results|length }}</p>
+        
+        <table>
+            <tr>
+                <th>Target</th>
+                <th>Status</th>
+                <th>Title</th>
+                <th>Server</th>
+                <th>Vulnerabilities</th>
+                <th>Scanned At</th>
+            </tr>
+            {% for r in results %}
+            <tr>
+                <td>{{ r.ip }}:{{ r.port }}<br><small>{{ r.hostname or '' }}</small></td>
+                <td>{{ r.status_code }}</td>
+                <td>{{ r.title or '' }}</td>
+                <td>{{ r.server or '' }}</td>
+                <td class="{{ r.vuln_max_risk }}">
+                    {{ r.vuln_count }} findings (Max: {{ r.vuln_max_risk }})
+                </td>
+                <td>{{ r.scanned_at[:19] }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </body>
+    </html>
+    """
+    
+    template = Template(html_template)
+    html_content = template.render(
+        results=results, 
+        generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+    
+    return StreamingResponse(
+        iter([html_content]), 
+        media_type="text/html",
+        headers={"Content-Disposition": "attachment; filename=ipscan_report.html"}
+    )
 
 
 # ========== WebSocket ==========

@@ -22,11 +22,11 @@ async def take_screenshot(url: str, ip: str, port: int) -> str | None:
     戻り値はファイルパス（成功時）またはNone（失敗時）。
     """
     try:
-        from playwright.async_api import async_playwright
+        from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
         # ファイル名を生成（IP_ポート_タイムスタンプ.webp）
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{ip.replace('.', '_')}_{port}_{timestamp}.webp"
+        filename = f"{ip.replace('.', '_')}_{port}_{timestamp}.png"
         filepath = os.path.join(SCREENSHOT_DIR, filename)
 
         async with async_playwright() as p:
@@ -46,20 +46,28 @@ async def take_screenshot(url: str, ip: str, port: int) -> str | None:
             page = await context.new_page()
 
             try:
-                # ページを読み込む（最大10秒）
-                await page.goto(url, timeout=10000, wait_until="domcontentloaded")
+                # ページを読み込む（最大15秒）
+                try:
+                    await page.goto(url, timeout=15000, wait_until="load")
+                except PlaywrightTimeoutError:
+                    print(f"Timeout on {url}, taking screenshot anyway", flush=True)
+                except Exception as e:
+                    print(f"Goto error on {url}: {e}", flush=True)
+                    
                 # 少し待ってレンダリング完了を待つ
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
                 # スクリーンショットを撮影
                 await page.screenshot(path=filepath, type="png")
                 return filename
-            except Exception:
+            except Exception as e:
+                print(f"Screenshot error for {url}: {e}", flush=True)
                 return None
             finally:
                 await browser.close()
 
-    except ImportError:
-        # Playwrightがインストールされていない場合
+    except ImportError as e:
+        print(f"Playwright ImportError: {e}", flush=True)
         return None
-    except Exception:
+    except Exception as e:
+        print(f"Screenshot top-level error: {e}", flush=True)
         return None

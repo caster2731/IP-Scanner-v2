@@ -251,6 +251,13 @@ def check_tech_fingerprint(headers: dict, body: str) -> list[dict]:
 
     return findings
 
+def extract_tech_stack(findings: list[dict]) -> list[str]:
+    """脆弱性スキャン結果からTech Stackのリストを抽出する"""
+    techs = []
+    for f in findings:
+        if f.get("type") == "tech_detected":
+            techs.append(f["name"])
+    return techs
 
 # ========== SSL/TLS 脆弱性チェック ==========
 

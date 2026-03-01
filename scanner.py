@@ -16,7 +16,7 @@ from datetime import datetime
 from ip_generator import generate_random_ip
 from database import save_result
 from screenshot import take_screenshot
-from vuln_scanner import run_vuln_scan, summarize_vulns
+from vuln_scanner import run_vuln_scan, summarize_vulns, extract_tech_stack
 
 # スキャンの状態を管理する辞書
 scan_state = {
@@ -142,16 +142,48 @@ async def get_country_info(session: aiohttp.ClientSession, ip: str) -> dict:
 
 async def scan_single_ip(session: aiohttp.ClientSession, ip: str, port: int,
                          take_screenshots: bool = True,
-                         run_vuln_check: bool = True) -> dict | None:
+                         run_vuln_check: bool = True,
+                         search_regex: str | None = None) -> dict | None:
     """
     1つのIP:ポートをスキャンする。
     Webサービスが見つかった場合、結果を辞書で返す。
+    非Webポート(21, 22, 3389等)のバナー取得も行う。
     """
-    # プロトコル判定
+    # 非Webポートの判定
+    is_web = port not in [21, 22, 3389]
     protocol = "https" if port in (443, 8443) else "http"
-    url = f"{protocol}://{ip}:{port}"
+    if not is_web:
+        protocol = {21: "ftp", 22: "ssh", 3389: "rdp"}.get(port, "tcp")
 
+    url = f"{protocol}://{ip}:{port}"
     start_time = time.time()
+    
+    # 非Webポート用のバナー取得処理
+    if not is_web:
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(ip, port), timeout=3
+            )
+            banner = b""
+            # 短時間で受信できるだけ読む
+            try:
+                banner = await asyncio.wait_for(reader.read(1024), timeout=2)
+            except asyncio.TimeoutError:
+                pass
+            writer.close()
+            await writer.wait_closed()
+            
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            banner_text = banner.decode("utf-8", errors="ignore").strip()
+            # 空でも接続できたなら記録
+            return {
+                "ip": ip, "port": port, "protocol": protocol,
+                "status_code": 200, "title": f"{protocol.upper()} Service",
+                "server": banner_text[:200] if banner_text else "Open",
+                "response_time_ms": elapsed_ms, "scanned_at": datetime.now().isoformat(),
+            }
+        except Exception:
+            return None
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(
             total=8, connect=3, sock_read=5
@@ -164,6 +196,17 @@ async def scan_single_ip(session: aiohttp.ClientSession, ip: str, port: int,
                 body = body[:1_000_000]
             except Exception:
                 body = ""
+                
+            tech_stack = []
+
+            # カスタムキーワード（正規表現）検索
+            if search_regex and body:
+                try:
+                    import re
+                    if re.search(search_regex, body, re.IGNORECASE):
+                        tech_stack.append(f"Regex Match: {search_regex}")
+                except re.error:
+                    pass
 
             # ページタイトルの抽出
             title = await extract_title(body)
@@ -213,6 +256,11 @@ async def scan_single_ip(session: aiohttp.ClientSession, ip: str, port: int,
                         vuln_data = json.dumps(findings, ensure_ascii=False)
                         vuln_count = vuln_summary["total"]
                         vuln_max_risk = vuln_summary["max_risk"]
+                        
+                        # 脆弱性スキャン内で検出された技術スタックを抽出して結合
+                        detected_techs = extract_tech_stack(findings)
+                        if detected_techs:
+                            tech_stack.extend(detected_techs)
                 except Exception:
                     pass
 
@@ -240,6 +288,7 @@ async def scan_single_ip(session: aiohttp.ClientSession, ip: str, port: int,
                 "vulnerabilities": vuln_data,
                 "vuln_count": vuln_count,
                 "vuln_max_risk": vuln_max_risk,
+                "tech_stack": ", ".join(tech_stack) if tech_stack else None,
                 "scanned_at": datetime.now().isoformat(),
             }
 
@@ -264,7 +313,34 @@ async def notify_ws(data: dict):
         ws_connections.remove(ws)
 
 
-def parse_target_ips(target_input: str) -> list[str]:
+def enumerate_subdomains_from_crtsh(domain: str, limit: int = 500) -> set[str]:
+    """crt.shを利用して指定されたドメインのサブドメインを列挙する（同期API）"""
+    import urllib.request
+    import json
+    subdomains = set()
+    url = f"https://crt.sh/?q=%.{domain}&output=json"
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 IPScanner/2.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status == 200:
+                data = json.loads(response.read().decode('utf-8'))
+                for entry in data:
+                    name_value = entry.get('name_value', '')
+                    # ワイルドカード証明書や複数ドメインが含まれる場合があるため改行で分割
+                    for name in name_value.split('\n'):
+                        name = name.strip().lower()
+                        if name.endswith(domain) and not name.startswith('*'):
+                            subdomains.add(name)
+                        if len(subdomains) >= limit:
+                            break
+                    if len(subdomains) >= limit:
+                        break
+    except Exception as e:
+        print(f"Error enumerating subdomains for {domain}: {e}")
+    return subdomains
+
+
+def parse_target_ips(target_input: str, enumerate_subdomains: bool = False) -> list[str]:
     """
     ユーザー入力からIPアドレスリストを生成する。
     対応形式:
@@ -334,8 +410,17 @@ def parse_target_ips(target_input: str) -> list[str]:
             resolved_ip = _resolve_hostname(hostname, resolved_cache)
             if resolved_ip:
                 ips.append(resolved_ip)
+            
+            # サブドメイン列挙（オプション）
+            if enumerate_subdomains:
+                subdomains = enumerate_subdomains_from_crtsh(hostname)
+                for sub in subdomains:
+                    sub_ip = _resolve_hostname(sub, resolved_cache)
+                    if sub_ip:
+                        ips.append(sub_ip)
 
-    return ips
+    # 重複排除をしつつ順序を保持
+    return list(dict.fromkeys(ips))
 
 
 def _resolve_hostname(hostname: str, cache: dict) -> str | None:
@@ -355,7 +440,7 @@ def _resolve_hostname(hostname: str, cache: dict) -> str | None:
 
 
 async def scan_worker(ports: list[int], take_screenshots: bool = True,
-                      run_vuln_check: bool = True):
+                      run_vuln_check: bool = True, search_regex: str | None = None):
     """
     ランダムスキャンワーカー。
     ランダムIPを継続的に生成してスキャンし、結果をDBに保存してWebSocketで通知する。
@@ -381,7 +466,7 @@ async def scan_worker(ports: list[int], take_screenshots: bool = True,
                 ip = generate_random_ip()
                 for port in ports:
                     tasks.append(scan_single_ip(
-                        session, ip, port, take_screenshots, run_vuln_check
+                        session, ip, port, take_screenshots, run_vuln_check, search_regex
                     ))
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -431,7 +516,8 @@ async def scan_worker(ports: list[int], take_screenshots: bool = True,
 
 async def scan_target_worker(target_ips: list[str], ports: list[int],
                               take_screenshots: bool = True,
-                              run_vuln_check: bool = True):
+                              run_vuln_check: bool = True,
+                              search_regex: str | None = None):
     """
     指定IPスキャンワーカー。
     指定されたIPリストを順にスキャンする。
@@ -460,7 +546,7 @@ async def scan_target_worker(target_ips: list[str], ports: list[int],
 
             batch = all_tasks[i:i + batch_size]
             tasks = [
-                scan_single_ip(session, ip, port, take_screenshots, run_vuln_check)
+                scan_single_ip(session, ip, port, take_screenshots, run_vuln_check, search_regex)
                 for ip, port in batch
             ]
 

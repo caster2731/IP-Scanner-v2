@@ -134,7 +134,16 @@
                             <input type="checkbox" id="runVulnCheck" checked>
                             <span>🛡️ 脆弱性スキャン</span>
                         </label>
+                        <label class="toggle-btn subnet-toggle" id="subdomainToggleWrapper" style="display:none;">
+                            <input type="checkbox" id="enumerateSubdomains">
+                            <span>🔍 サブドメイン列挙</span>
+                        </label>
                     </div>
+                </div>
+                <div class="control-group">
+                    <label class="control-label">カスタム正規表現検索（任意）</label>
+                    <input type="text" id="searchRegex" class="search-input"
+                        placeholder="例: WordPress.*?(\d+\.\d+) / password / error" style="margin-bottom: 10px;">
                 </div>
                 <div class="control-group actions">
                     <button class="btn btn-start" id="btnStart" onclick="startScan()">
@@ -150,7 +159,7 @@
             </div>
         </section>
 
-        <!-- フィルター -->
+        <!-- フィルターとエクスポート -->
         <section class="filter-bar glass-card">
             <div class="filter-group">
                 <input type="text" id="searchInput" class="search-input" placeholder="IP、タイトル、サーバーで検索..."
@@ -175,15 +184,33 @@
                     <option value="low">🔵 Low</option>
                 </select>
             </div>
+            <div class="filter-group" style="margin-left: auto;">
+                <select id="exportSelect" class="filter-select" onchange="exportResults(this.value)">
+                    <option value="">⬇️ エクスポート</option>
+                    <option value="csv">CSVとして保存</option>
+                    <option value="json">JSONとして保存</option>
+                    <option value="html">HTMLレポート</option>
+                </select>
+            </div>
         </section>
 
         <!-- 結果テーブル -->
         <section class="results-section glass-card">
             <div class="section-header">
-                <h2 class="section-title">発見されたWebサービス</h2>
-                <span class="result-count" id="resultCount">0 件</span>
+                <div>
+                    <h2 class="section-title">発見されたWebサービス</h2>
+                    <span class="result-count" id="resultCount">0 件</span>
+                </div>
+                <div class="view-toggle">
+                    <button class="view-btn active" id="btnTableView" onclick="switchView('table')">
+                        <span class="icon">≡</span> テーブル
+                    </button>
+                    <button class="view-btn" id="btnGalleryView" onclick="switchView('gallery')">
+                        <span class="icon">⊞</span> ギャラリー
+                    </button>
+                </div>
             </div>
-            <div class="table-wrapper">
+            <div class="table-wrapper" id="tableWrapper">
                 <table class="results-table" id="resultsTable">
                     <thead>
                         <tr>
@@ -193,6 +220,7 @@
                             <th>国籍</th>
                             <th>タイトル</th>
                             <th>サーバー</th>
+                            <th>テクスタック</th>
                             <th>脆弱性</th>
                             <th>SSL</th>
                             <th>応答時間</th>
@@ -202,7 +230,7 @@
                     </thead>
                     <tbody id="resultsBody">
                         <tr class="empty-row">
-                            <td colspan="11">
+                            <td colspan="12">
                                 <div class="empty-state">
                                     <span class="empty-icon">🛰️</span>
                                     <p>スキャンを開始すると、発見されたWebサービスがここに表示されます</p>
@@ -211,6 +239,16 @@
                         </tr>
                     </tbody>
                 </table>
+            </div>
+
+            <div class="gallery-wrapper" id="galleryWrapper" style="display:none;">
+                <div class="gallery-grid" id="galleryGrid">
+                    <!-- ギャラリーカードがここに動的に追加される -->
+                    <div class="empty-state">
+                        <span class="empty-icon">🛰️</span>
+                        <p>スキャンを開始すると、発見されたWebサービスがここに表示されます</p>
+                    </div>
+                </div>
             </div>
             <div class="pagination">
                 <button class="btn btn-page" id="btnPrev" onclick="prevPage()" disabled>← 前へ</button>

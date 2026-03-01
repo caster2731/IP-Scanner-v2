@@ -1,0 +1,1 @@
+import urllib.request, json; data={'targets': 'example.com', 'ports': [80, 443], 'run_vuln_check': True, 'take_screenshots': True}; req = urllib.request.Request('http://127.0.0.1:8000/api/scan/target', method='POST', headers={'Content-Type': 'application/json'}, data=json.dumps(data).encode('utf-8')); print(urllib.request.urlopen(req).read().decode('utf-8'))

@@ -12,6 +12,7 @@ let searchTimeout = null;
 let elapsedTimer = null;
 let scanStartTime = null;
 let currentMode = 'random';  // 'random' or 'target'
+let currentResults = []; // 現在画面に表示中のデータ保持用
 
 // ========== WebSocket ==========
 
@@ -56,6 +57,10 @@ function switchMode(mode) {
     document.getElementById('modeRandom').classList.toggle('active', mode === 'random');
     document.getElementById('modeTarget').classList.toggle('active', mode === 'target');
     document.getElementById('targetInputArea').style.display = mode === 'target' ? 'block' : 'none';
+    const subdomainToggle = document.getElementById('subdomainToggleWrapper');
+    if (subdomainToggle) {
+        subdomainToggle.style.display = mode === 'target' ? 'inline-flex' : 'none';
+    }
 }
 
 // ========== スキャン制御 ==========
@@ -74,6 +79,8 @@ async function startScan() {
 
     const takeScreenshots = document.getElementById('takeScreenshots').checked;
     const runVulnCheck = document.getElementById('runVulnCheck').checked;
+    const searchRegex = document.getElementById('searchRegex') ? document.getElementById('searchRegex').value.trim() : "";
+    const enumerateSubdomains = document.getElementById('enumerateSubdomains') ? document.getElementById('enumerateSubdomains').checked : false;
 
     try {
         let response;
@@ -91,7 +98,9 @@ async function startScan() {
                     targets,
                     ports,
                     take_screenshots: takeScreenshots,
-                    run_vuln_check: runVulnCheck
+                    run_vuln_check: runVulnCheck,
+                    search_regex: searchRegex || null,
+                    enumerate_subdomains: enumerateSubdomains
                 })
             });
         } else {
@@ -102,7 +111,8 @@ async function startScan() {
                 body: JSON.stringify({
                     ports,
                     take_screenshots: takeScreenshots,
-                    run_vuln_check: runVulnCheck
+                    run_vuln_check: runVulnCheck,
+                    search_regex: searchRegex || null
                 })
             });
         }
@@ -230,6 +240,16 @@ function addResultToTable(result) {
         tbody.removeChild(tbody.lastChild);
     }
 
+    currentResults.unshift(result);
+    if (currentResults.length > PAGE_SIZE) {
+        currentResults.pop();
+    }
+
+    // ギャラリービュー表示中の場合はギャラリーも更新
+    if (currentView === 'gallery') {
+        renderResults(currentResults);
+    }
+
     // 脆弱性カウント更新
     if (result.vuln_count > 0) {
         const el = document.getElementById('vulnCount');
@@ -267,6 +287,16 @@ function createResultRow(r) {
         r.response_time_ms < 2000 ? 'time-medium' : 'time-slow';
     const timeHtml = `<span class="response-time ${timeClass}">${r.response_time_ms}ms</span>`;
 
+    // テクスタック
+    let techHtml = '<span class="text-muted">-</span>';
+    if (r.tech_stack) {
+        const techs = r.tech_stack.split(',').map(t => t.trim()).filter(Boolean);
+        techHtml = `<div style="display:flex; flex-wrap:wrap; gap:4px; max-width:120px;">
+            ${techs.slice(0, 2).map(t => `<span class="tech-badge" title="${escapeHtml(t)}">${escapeHtml(t)}</span>`).join('')}
+            ${techs.length > 2 ? `<span class="tech-badge" title="${escapeHtml(r.tech_stack)}">+${techs.length - 2}</span>` : ''}
+        </div>`;
+    }
+
     // スクリーンショット
     let screenshotHtml = '<span class="no-screenshot">-</span>';
     if (r.screenshot_path) {
@@ -300,6 +330,7 @@ function createResultRow(r) {
         <td>${countryHtml}</td>
         <td class="title-cell" title="${escapeHtml(r.title || '')}">${escapeHtml(r.title || '-')}</td>
         <td class="server-cell" title="${escapeHtml(r.server || '')}">${escapeHtml(r.server || '-')}</td>
+        <td>${techHtml}</td>
         <td>${vulnHtml}</td>
         <td class="ssl-cell">${sslHtml}</td>
         <td>${timeHtml}</td>
@@ -350,7 +381,8 @@ async function loadResults() {
         const response = await fetch(`/api/results?${params}`);
         const data = await response.json();
 
-        renderResults(data.results);
+        currentResults = data.results;
+        renderResults(currentResults);
         updateResultCount(data.count);
         updatePagination();
     } catch (e) {
@@ -358,24 +390,152 @@ async function loadResults() {
     }
 }
 
+function exportResults(format) {
+    if (!format) return;
+
+    // セレクトボックスを元に戻す
+    document.getElementById('exportSelect').value = '';
+
+    const search = document.getElementById('searchInput').value;
+    const statusFilter = document.getElementById('statusFilter').value;
+    const riskFilter = document.getElementById('riskFilter').value;
+
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (statusFilter) params.append('status_filter', statusFilter);
+    if (riskFilter) params.append('risk_filter', riskFilter);
+
+    // ファイルダウンロードのエンドポイントを開く
+    const url = `/api/export/${format}?${params.toString()}`;
+    window.open(url, '_blank');
+}
+
+let currentView = 'table';
+
+function switchView(viewMode) {
+    currentView = viewMode;
+    document.getElementById('btnTableView').classList.toggle('active', viewMode === 'table');
+    document.getElementById('btnGalleryView').classList.toggle('active', viewMode === 'gallery');
+    document.getElementById('tableWrapper').style.display = viewMode === 'table' ? 'block' : 'none';
+    document.getElementById('galleryWrapper').style.display = viewMode === 'gallery' ? 'block' : 'none';
+
+    // 現在の結果で再描画
+    if (currentResults.length > 0) {
+        renderResults(currentResults);
+    }
+}
+
 function renderResults(results) {
     const tbody = document.getElementById('resultsBody');
+    const galleryGrid = document.getElementById('galleryGrid');
 
     if (results.length === 0) {
+        const emptyHtml = `
+            <div class="empty-state">
+                <span class="empty-icon">🛰️</span>
+                <p>条件に一致する結果がありません</p>
+            </div>
+        `;
         tbody.innerHTML = `
             <tr class="empty-row">
-                <td colspan="11">
-                    <div class="empty-state">
-                        <span class="empty-icon">🛰️</span>
-                        <p>条件に一致する結果がありません</p>
-                    </div>
+                <td colspan="12">
+                    ${emptyHtml}
                 </td>
             </tr>
         `;
+        galleryGrid.innerHTML = emptyHtml;
         return;
     }
 
-    tbody.innerHTML = results.map(r => `<tr>${createResultRow(r)}</tr>`).join('');
+    if (currentView === 'table') {
+        tbody.innerHTML = results.map(r => `<tr>${createResultRow(r)}</tr>`).join('');
+    } else {
+        galleryGrid.innerHTML = results.map(r => createGalleryCard(r)).join('');
+    }
+}
+
+function createGalleryCard(r) {
+    const statusClass = getStatusClass(r.status_code);
+    const time = r.scanned_at ? new Date(r.scanned_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : '-';
+
+    // スクリーンショット部分
+    let imgHtml = '';
+    if (r.screenshot_path) {
+        imgHtml = `<img src="/screenshots/${r.screenshot_path}" alt="Screenshot" onclick="showDetails(${r.id})">`;
+    } else {
+        imgHtml = `
+            <div class="gallery-card-noimg" onclick="showDetails(${r.id})">
+                <span>NO IMAGE</span>
+                <div style="font-size: 14px; color: var(--accent-primary);">${r.status_code}</div>
+            </div>
+        `;
+    }
+
+    // 脆弱性表示
+    let vulnIconHtml = '';
+    if (r.vuln_count > 0) {
+        const riskIcon = getRiskIcon(r.vuln_max_risk);
+        vulnIconHtml = `<span title="脆弱性 ${r.vuln_count}件" style="color: var(--risk-${r.vuln_max_risk || 'info'}); cursor: pointer;" onclick="showDetails(${r.id})">${riskIcon} ${r.vuln_count}</span>`;
+    }
+
+    // 国旗
+    let flagHtml = '';
+    if (r.country_code) {
+        flagHtml = `<span title="${escapeHtml(r.country || '')}">${countryCodeToFlag(r.country_code)}</span>`;
+    }
+
+    const titleText = r.title ? escapeHtml(r.title) : escapeHtml(r.server || 'Unknown Service');
+
+    // TechStack
+    let techHtml = '';
+    if (r.tech_stack) {
+        const techs = r.tech_stack.split(',').map(t => t.trim()).filter(Boolean);
+        techHtml = `
+            <div class="gallery-card-tech">
+                ${techs.slice(0, 3).map(t => `<span class="tech-badge">${escapeHtml(t)}</span>`).join('')}
+                ${techs.length > 3 ? `<span class="tech-badge">+${techs.length - 3}</span>` : ''}
+            </div>
+        `;
+    }
+
+    return `
+        <div class="gallery-card">
+            <div class="gallery-card-img">
+                ${imgHtml}
+            </div>
+            <div class="gallery-card-content">
+                <div class="gallery-card-header">
+                    <a href="${r.protocol}://${r.ip}:${r.port}" target="_blank" class="gallery-card-ip" style="text-decoration:none;">
+                        ${r.ip}:${r.port}
+                    </a>
+                    <span class="status-badge ${statusClass}" style="transform: scale(0.85); transform-origin: right;">${r.status_code}</span>
+                </div>
+                
+                <div class="gallery-card-title" title="${titleText}">
+                    ${titleText}
+                </div>
+                
+                <div class="gallery-card-meta">
+                    <div>
+                        <span class="icon">🌍</span>
+                        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                            ${flagHtml} ${escapeHtml(r.hostname || '-')}
+                        </span>
+                    </div>
+                    ${techHtml}
+                </div>
+                
+                <div class="gallery-card-footer">
+                    <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">
+                        ${time}
+                    </div>
+                    <div style="display:flex; gap: 8px; font-size: 12px;">
+                        ${vulnIconHtml}
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
 }
 
 function updateResultCount(count) {

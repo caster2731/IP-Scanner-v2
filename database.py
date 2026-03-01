@@ -37,6 +37,7 @@ async def init_db():
                 hostname TEXT,
                 country TEXT,
                 country_code TEXT,
+                tech_stack TEXT,
                 scanned_at TEXT NOT NULL
             )
         """)
@@ -76,6 +77,10 @@ async def init_db():
             await db.execute("ALTER TABLE scan_results ADD COLUMN country_code TEXT")
         except Exception:
             pass
+        try:
+            await db.execute("ALTER TABLE scan_results ADD COLUMN tech_stack TEXT")
+        except Exception:
+            pass
 
         await db.commit()
 
@@ -88,8 +93,8 @@ async def save_result(result: dict) -> int:
             (ip, port, protocol, status_code, title, server, 
              ssl_issuer, ssl_expiry, ssl_domain, screenshot_path, 
              response_time_ms, headers, vulnerabilities, vuln_count, 
-             vuln_max_risk, hostname, country, country_code, scanned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             vuln_max_risk, hostname, country, country_code, tech_stack, scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             result.get("ip"),
             result.get("port"),
@@ -109,16 +114,17 @@ async def save_result(result: dict) -> int:
             result.get("hostname"),
             result.get("country"),
             result.get("country_code"),
+            result.get("tech_stack"),
             result.get("scanned_at", datetime.now().isoformat()),
         ))
         await db.commit()
         return cursor.lastrowid
 
 
-async def get_results(limit: int = 100, offset: int = 0, 
+async def get_results(limit: int | None = 100, offset: int = 0, 
                       status_filter: str = None, search: str = None,
                       risk_filter: str = None) -> list[dict]:
-    """スキャン結果を取得する（ページネーション・フィルター対応）"""
+    """スキャン結果を取得する（ページネーション・フィルター・全件取得対応）"""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         query = "SELECT * FROM scan_results WHERE 1=1"
@@ -149,8 +155,11 @@ async def get_results(limit: int = 100, offset: int = 0,
             search_term = f"%{search}%"
             params.extend([search_term, search_term, search_term, search_term, search_term])
 
-        query += " ORDER BY scanned_at DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
+        query += " ORDER BY scanned_at DESC"
+        
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
 
         async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()

@@ -4,3 +4,4 @@ aiohttp
 aiosqlite
 playwright
 beautifulsoup4
+jinja2
