@@ -17,6 +17,10 @@ from ip_generator import generate_random_ip
 from database import save_result, is_recently_scanned
 from screenshot import take_screenshot
 from vuln_scanner import run_vuln_scan, summarize_vulns, extract_tech_stack, match_cves, check_honeypot
+from stealth_config import (
+    stealth_state, get_random_headers, get_random_delay,
+    create_stealth_connector, create_proxy_tcp_connection,
+)
 
 # スキャンの状態を管理する辞書
 scan_state = {
@@ -169,9 +173,11 @@ async def scan_single_ip(session: aiohttp.ClientSession, ip: str, port: int,
     # 非Webポート用のバナー取得処理
     if not is_web:
         try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(ip, port), timeout=3
-            )
+            # ステルスモード時はプロキシ経由で接続
+            conn = await create_proxy_tcp_connection(ip, port, timeout=3)
+            if conn is None:
+                return None
+            reader, writer = conn
             banner = b""
             # 短時間で受信できるだけ読む
             try:
@@ -193,9 +199,11 @@ async def scan_single_ip(session: aiohttp.ClientSession, ip: str, port: int,
         except Exception:
             return None
     try:
+        # ステルスモード時はランダムなHTTPヘッダーを使用
+        req_headers = get_random_headers()
         async with session.get(url, timeout=aiohttp.ClientTimeout(
             total=8, connect=3, sock_read=5
-        ), allow_redirects=True, ssl=False) as response:
+        ), allow_redirects=True, ssl=False, headers=req_headers) as response:
             elapsed_ms = int((time.time() - start_time) * 1000)
 
             # レスポンスボディを取得（最大1MB）
@@ -484,12 +492,8 @@ async def scan_worker(ports: list[int], take_screenshots: bool = True,
     ランダムスキャンワーカー。
     ランダムIPを継続的に生成してスキャンし、結果をDBに保存してWebSocketで通知する。
     """
-    connector = aiohttp.TCPConnector(
-        limit=200,
-        ttl_dns_cache=300,
-        enable_cleanup_closed=True,
-        force_close=True,
-    )
+    # ステルスモード時はプロキシコネクターを使用
+    connector = create_stealth_connector()
 
     async with aiohttp.ClientSession(connector=connector) as session:
         rate_counter = 0
@@ -540,6 +544,8 @@ async def scan_worker(ports: list[int], take_screenshots: bool = True,
                 })
 
             await asyncio.sleep(0.01)
+            # ステルスモード時はランダム遅延を追加
+            await get_random_delay()
 
     await notify_ws({
         "type": "status",
@@ -564,12 +570,8 @@ async def scan_target_worker(target_ips: list[str], ports: list[int],
     scan_state["target_total"] = len(target_ips) * len(ports)
     scan_state["target_done"] = 0
 
-    connector = aiohttp.TCPConnector(
-        limit=100,
-        ttl_dns_cache=300,
-        enable_cleanup_closed=True,
-        force_close=True,
-    )
+    # ステルスモード時はプロキシコネクターを使用
+    connector = create_stealth_connector()
 
     async with aiohttp.ClientSession(connector=connector) as session:
         rate_counter = 0
@@ -627,6 +629,8 @@ async def scan_target_worker(target_ips: list[str], ports: list[int],
             })
 
             await asyncio.sleep(0.01)
+            # ステルスモード時はランダム遅延を追加
+            await get_random_delay()
 
     # スキャン完了
     scan_state["running"] = False
@@ -642,3 +646,214 @@ async def scan_target_worker(target_ips: list[str], ports: list[int],
             "target_done": scan_state["target_done"],
         }
     })
+
+
+async def scan_camera_worker(
+    ports: list[int],
+    take_screenshots: bool = True,
+    run_vuln_check: bool = False,
+    search_regex: str | None = None,
+):
+    """
+    カメラスキャン専用ワーカー。
+    ランダムIPを生成し、カメラ用ポートをスキャンして監視カメラを検出する。
+    HTTPポートはscan_single_ipで通常スキャン後、カメラ判定を追加実行。
+    RTSP/DVRポートは専用のバナー判定で検出する。
+    """
+    from camera_scanner import (
+        CAMERA_HTTP_PORTS, CAMERA_BANNER_PORTS,
+        detect_camera, check_rtsp_banner, check_dvr_banner,
+    )
+
+    # ステルスモード時はプロキシコネクターを使用
+    connector = create_stealth_connector()
+
+    async with aiohttp.ClientSession(connector=connector) as session:
+        rate_counter = 0
+        rate_start = time.time()
+
+        while scan_state["running"]:
+            tasks = []
+            batch_size = 50
+
+            # ランダムIPを生成してカメラ用ポートでスキャン
+            batch_ips = []
+            for _ in range(batch_size):
+                if not scan_state["running"]:
+                    break
+                ip = generate_random_ip()
+                batch_ips.append(ip)
+                for port in ports:
+                    if port in CAMERA_HTTP_PORTS:
+                        # HTTPポートは通常のスキャン関数で処理
+                        tasks.append(scan_single_ip(
+                            session, ip, port, take_screenshots,
+                            run_vuln_check, search_regex
+                        ))
+                    elif port in {554, 8554, 10554}:
+                        # RTSPポートはバナー判定
+                        tasks.append(_scan_rtsp_port(ip, port))
+                    else:
+                        # DVR/NVR系ポート
+                        tasks.append(_scan_dvr_port(ip, port))
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result in results:
+                if not scan_state["running"]:
+                    break
+                if isinstance(result, dict) and result is not None:
+                    # RTSP/DVRスキャン結果は既にcamera_vendor付き
+                    # HTTPスキャン結果にはカメラ判定を追加
+                    if "camera_vendor" not in result:
+                        camera_info = detect_camera(
+                            result.get("title", ""),
+                            result.get("server", ""),
+                            "",  # bodyは軽量化のためスキップ
+                            result.get("port", 0),
+                        )
+                        if camera_info:
+                            result["camera_vendor"] = camera_info["vendor"]
+                            result["camera_confidence"] = camera_info["confidence"]
+                            result["camera_type"] = "IP Camera"
+                        else:
+                            # カメラと判定されなかった場合はスキップ
+                            continue
+                    
+                    result_id = await save_result(result)
+                    result["id"] = result_id
+                    scan_state["total_found"] += 1
+                    await notify_ws({"type": "result", "data": result})
+
+            scanned_count = len(tasks)
+            scan_state["total_scanned"] += scanned_count
+            rate_counter += scanned_count
+
+            elapsed = time.time() - rate_start
+            if elapsed >= 1.0:
+                scan_state["current_rate"] = round(rate_counter / elapsed)
+                rate_counter = 0
+                rate_start = time.time()
+                await notify_ws({
+                    "type": "status",
+                    "data": {
+                        "running": scan_state["running"],
+                        "total_scanned": scan_state["total_scanned"],
+                        "total_found": scan_state["total_found"],
+                        "current_rate": scan_state["current_rate"],
+                        "mode": scan_state["mode"],
+                    }
+                })
+
+            await asyncio.sleep(0.01)
+            # ステルスモード時はランダム遅延を追加
+            await get_random_delay()
+
+    await notify_ws({
+        "type": "status",
+        "data": {
+            "running": False,
+            "total_scanned": scan_state["total_scanned"],
+            "total_found": scan_state["total_found"],
+            "current_rate": 0,
+            "mode": scan_state["mode"],
+        }
+    })
+
+
+async def _scan_rtsp_port(ip: str, port: int) -> dict | None:
+    """RTSPポートをスキャンしてカメラを検出する"""
+    from camera_scanner import check_rtsp_banner
+
+    rtsp_info = await check_rtsp_banner(ip, port)
+    if not rtsp_info:
+        return None
+
+    start_time = time.time()
+
+    # 逆引きDNS + 国籍取得
+    hostname = None
+    country_info = {"country": None, "country_code": None, "lat": None, "lon": None}
+    try:
+        async with aiohttp.ClientSession() as temp_session:
+            hostname_task = reverse_dns_lookup(ip)
+            country_task = get_country_info(temp_session, ip)
+            hostname, country_info = await asyncio.gather(
+                hostname_task, country_task, return_exceptions=True
+            )
+            if isinstance(hostname, Exception):
+                hostname = None
+            if isinstance(country_info, Exception):
+                country_info = {"country": None, "country_code": None, "lat": None, "lon": None}
+    except Exception:
+        pass
+
+    elapsed_ms = int((time.time() - start_time) * 1000)
+
+    return {
+        "ip": ip,
+        "port": port,
+        "protocol": "rtsp",
+        "status_code": 200,
+        "title": f"RTSP Camera ({rtsp_info.get('vendor') or 'Unknown'})",
+        "server": rtsp_info.get("banner", "")[:200],
+        "hostname": hostname,
+        "country": country_info.get("country") if isinstance(country_info, dict) else None,
+        "country_code": country_info.get("country_code") if isinstance(country_info, dict) else None,
+        "latitude": country_info.get("lat") if isinstance(country_info, dict) else None,
+        "longitude": country_info.get("lon") if isinstance(country_info, dict) else None,
+        "response_time_ms": elapsed_ms,
+        "scanned_at": datetime.now().isoformat(),
+        "camera_vendor": rtsp_info.get("vendor"),
+        "camera_type": "RTSP Camera",
+        "camera_confidence": "high",
+    }
+
+
+async def _scan_dvr_port(ip: str, port: int) -> dict | None:
+    """DVR/NVR系ポートをスキャンしてカメラを検出する"""
+    from camera_scanner import check_dvr_banner
+
+    dvr_info = await check_dvr_banner(ip, port)
+    if not dvr_info:
+        return None
+
+    start_time = time.time()
+
+    # 逆引きDNS + 国籍取得
+    hostname = None
+    country_info = {"country": None, "country_code": None, "lat": None, "lon": None}
+    try:
+        async with aiohttp.ClientSession() as temp_session:
+            hostname_task = reverse_dns_lookup(ip)
+            country_task = get_country_info(temp_session, ip)
+            hostname, country_info = await asyncio.gather(
+                hostname_task, country_task, return_exceptions=True
+            )
+            if isinstance(hostname, Exception):
+                hostname = None
+            if isinstance(country_info, Exception):
+                country_info = {"country": None, "country_code": None, "lat": None, "lon": None}
+    except Exception:
+        pass
+
+    elapsed_ms = int((time.time() - start_time) * 1000)
+
+    return {
+        "ip": ip,
+        "port": port,
+        "protocol": "tcp",
+        "status_code": 200,
+        "title": f"{dvr_info.get('type', 'DVR/NVR')} ({dvr_info.get('vendor') or 'Unknown'})",
+        "server": dvr_info.get("banner", "")[:200],
+        "hostname": hostname,
+        "country": country_info.get("country") if isinstance(country_info, dict) else None,
+        "country_code": country_info.get("country_code") if isinstance(country_info, dict) else None,
+        "latitude": country_info.get("lat") if isinstance(country_info, dict) else None,
+        "longitude": country_info.get("lon") if isinstance(country_info, dict) else None,
+        "response_time_ms": elapsed_ms,
+        "scanned_at": datetime.now().isoformat(),
+        "camera_vendor": dvr_info.get("vendor"),
+        "camera_type": dvr_info.get("type", "DVR/NVR"),
+        "camera_confidence": "medium",
+    }

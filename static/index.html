@@ -29,6 +29,10 @@
             <span class="subtitle">Web Discovery & Vulnerability Scanner</span>
         </div>
         <div class="header-right">
+            <!-- テーマ切り替えボタン -->
+            <button class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleTheme()" title="テーマ切り替え">
+                <span class="theme-icon" id="themeIcon">🌙</span>
+            </button>
             <div class="status-indicator" id="statusIndicator">
                 <span class="status-dot"></span>
                 <span class="status-text">待機中</span>
@@ -88,6 +92,9 @@
                 <button class="mode-btn" id="modeTarget" onclick="switchMode('target')">
                     🎯 指定IPスキャン
                 </button>
+                <button class="mode-btn" id="modeCamera" onclick="switchMode('camera')">
+                    📹 カメラスキャン
+                </button>
             </div>
 
             <!-- 指定IP入力エリア（初期非表示） -->
@@ -128,6 +135,48 @@
                         </label>
                     </div>
                 </div>
+
+                <!-- カメラスキャン用ポート選択（カメラモード時のみ表示） -->
+                <div class="control-group camera-ports-area" id="cameraPortsArea" style="display:none;">
+                    <label class="control-label">📹 カメラ用ポート選択</label>
+                    <div class="port-toggles camera-port-toggles">
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port" value="80" checked><span>80
+                                (HTTP)</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port" value="81"
+                                checked><span>81</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port"
+                                value="88"><span>88</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port" value="443" checked><span>443
+                                (HTTPS)</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port" value="554" checked><span>554
+                                (RTSP)</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port" value="8080"
+                                checked><span>8080</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port"
+                                value="8443"><span>8443</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port" value="8554"
+                                checked><span>8554 (RTSP)</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port" value="10554"><span>10554
+                                (Hikvision)</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port" value="8000"
+                                checked><span>8000 (Hikvision/ONVIF)</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port" value="8899"><span>8899
+                                (ONVIF)</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port" value="37777"
+                                checked><span>37777 (Dahua)</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port" value="37778"><span>37778
+                                (Dahua)</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port" value="34567"
+                                checked><span>34567 (DVR/XMeye)</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port"
+                                value="9000"><span>9000</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port"
+                                value="5000"><span>5000</span></label>
+                        <label class="toggle-btn"><input type="checkbox" class="cam-port" value="1935"><span>1935
+                                (RTMP)</span></label>
+                    </div>
+                    <span class="input-hint">監視カメラでよく使われるポートを選択（チェック済み = デフォルト推奨）</span>
+                </div>
                 <div class="control-group">
                     <div class="option-toggles">
                         <label class="toggle-btn screenshot-toggle">
@@ -159,6 +208,114 @@
                     <button class="btn btn-clear" id="btnClear" onclick="clearResults()">
                         <span class="btn-icon">🗑</span> 結果クリア
                     </button>
+                </div>
+            </div>
+
+            <!-- ステルスモード設定パネル -->
+            <div class="stealth-panel" id="stealthPanel">
+                <div class="stealth-header">
+                    <div class="stealth-title">
+                        <span class="stealth-icon">🛡️</span>
+                        <span>ステルスモード</span>
+                        <span class="stealth-status-dot" id="stealthStatusDot" title="無効"></span>
+                    </div>
+                    <label class="stealth-toggle">
+                        <input type="checkbox" id="stealthEnabled" onchange="toggleStealth()">
+                        <span class="stealth-slider"></span>
+                    </label>
+                </div>
+                <div class="stealth-body" id="stealthBody" style="display:none;">
+                    <div class="stealth-option">
+                        <label class="stealth-label">🧅 プロキシURL（SOCKS5/Tor）</label>
+                        <input type="text" id="stealthProxyUrl" class="stealth-input" value="socks5://127.0.0.1:9050"
+                            placeholder="socks5://127.0.0.1:9050">
+                    </div>
+                    <div class="stealth-option">
+                        <label class="stealth-label">⏱️ リクエスト間隔（秒）</label>
+                        <div class="stealth-range-group">
+                            <input type="range" id="stealthDelayMin" min="0" max="10" step="0.1" value="0.1"
+                                class="stealth-range" oninput="updateDelayLabel()">
+                            <span>〜</span>
+                            <input type="range" id="stealthDelayMax" min="0.1" max="30" step="0.1" value="2.0"
+                                class="stealth-range" oninput="updateDelayLabel()">
+                            <span id="delayLabel" class="stealth-delay-label">0.1s 〜 2.0s</span>
+                        </div>
+                    </div>
+                    <div class="stealth-option">
+                        <label class="toggle-btn stealth-ua-toggle">
+                            <input type="checkbox" id="stealthRandomizeUA" checked>
+                            <span>🎭 User-Agentランダム化</span>
+                        </label>
+                    </div>
+                    <button class="btn stealth-apply-btn" onclick="applyStealth()">
+                        ⚡ 設定を適用
+                    </button>
+
+                    <!-- ステルス実効性モニター -->
+                    <div class="stealth-monitor" id="stealthMonitor">
+                        <div class="stealth-monitor-header" onclick="toggleStealthMonitorDetail()">
+                            <span class="stealth-monitor-title">📡 通信秘匿ステータス</span>
+                            <button class="btn stealth-verify-btn" id="stealthVerifyBtn"
+                                onclick="event.stopPropagation(); verifyStealthNow()">
+                                🔍 検証
+                            </button>
+                        </div>
+                        <!-- シンプルインジケーター（常時表示） -->
+                        <div class="stealth-indicators" id="stealthIndicators">
+                            <div class="stealth-ind" id="indProxy" title="プロキシ接続">
+                                <span class="ind-icon">🧅</span>
+                                <span class="ind-status ind-unknown">—</span>
+                            </div>
+                            <div class="stealth-ind" id="indExitIp" title="IP秘匿">
+                                <span class="ind-icon">🌍</span>
+                                <span class="ind-status ind-unknown">—</span>
+                            </div>
+                            <div class="stealth-ind" id="indUA" title="User-Agent">
+                                <span class="ind-icon">🎭</span>
+                                <span class="ind-status ind-unknown">—</span>
+                            </div>
+                            <div class="stealth-ind" id="indDelay" title="リクエスト遅延">
+                                <span class="ind-icon">⏱️</span>
+                                <span class="ind-status ind-unknown">—</span>
+                            </div>
+                            <div class="stealth-ind" id="indDNS" title="DNS保護">
+                                <span class="ind-icon">🔒</span>
+                                <span class="ind-status ind-unknown">—</span>
+                            </div>
+                        </div>
+                        <!-- フル詳細パネル（展開時のみ表示） -->
+                        <div class="stealth-monitor-detail" id="stealthMonitorDetail" style="display:none;">
+                            <div class="monitor-detail-row">
+                                <span class="monitor-label">🧅 プロキシ接続</span>
+                                <span class="monitor-value" id="detailProxy">未検証</span>
+                            </div>
+                            <div class="monitor-detail-row">
+                                <span class="monitor-label">🌍 出口IPアドレス</span>
+                                <span class="monitor-value" id="detailExitIp">未検証</span>
+                            </div>
+                            <div class="monitor-detail-row">
+                                <span class="monitor-label">🏠 直接IPアドレス</span>
+                                <span class="monitor-value" id="detailDirectIp">未検証</span>
+                            </div>
+                            <div class="monitor-detail-row">
+                                <span class="monitor-label">🎭 使用中User-Agent</span>
+                                <span class="monitor-value monitor-ua" id="detailUA">未検証</span>
+                            </div>
+                            <div class="monitor-detail-row">
+                                <span class="monitor-label">⏱️ リクエスト遅延</span>
+                                <span class="monitor-value" id="detailDelay">未検証</span>
+                            </div>
+                            <div class="monitor-detail-row">
+                                <span class="monitor-label">🔒 DNS保護（rdns）</span>
+                                <span class="monitor-value" id="detailDNS">未検証</span>
+                            </div>
+                            <div class="monitor-detail-row">
+                                <span class="monitor-label">🕐 最終検証時刻</span>
+                                <span class="monitor-value" id="detailCheckedAt">—</span>
+                            </div>
+                            <div class="monitor-error" id="monitorError" style="display:none;"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>

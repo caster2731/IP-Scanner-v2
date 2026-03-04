@@ -30,19 +30,37 @@ async def take_screenshot(url: str, ip: str, port: int) -> str | None:
         filepath = os.path.join(SCREENSHOT_DIR, filename)
 
         async with async_playwright() as p:
+            # ステルスモード時はプロキシを設定
+            launch_args = [
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--ignore-certificate-errors",  # 自己署名証明書も許可
+            ]
+
             browser = await p.chromium.launch(
                 headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--ignore-certificate-errors",  # 自己署名証明書も許可
-                ]
+                args=launch_args,
             )
-            context = await browser.new_context(
-                viewport={"width": 1280, "height": 720},
-                ignore_https_errors=True,  # SSL エラーを無視
-            )
+
+            # コンテキスト作成時にプロキシ設定を注入
+            context_options = {
+                "viewport": {"width": 1280, "height": 720},
+                "ignore_https_errors": True,  # SSL エラーを無視
+            }
+
+            # ステルスモード時はプロキシとUA設定を追加
+            try:
+                from stealth_config import get_playwright_proxy_config, get_random_ua, stealth_state
+                proxy_config = get_playwright_proxy_config()
+                if proxy_config:
+                    context_options["proxy"] = proxy_config
+                if stealth_state["enabled"]:
+                    context_options["user_agent"] = get_random_ua()
+            except ImportError:
+                pass
+
+            context = await browser.new_context(**context_options)
             page = await context.new_page()
 
             try:

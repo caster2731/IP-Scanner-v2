@@ -58,16 +58,63 @@ function switchMode(mode) {
     currentMode = mode;
     document.getElementById('modeRandom').classList.toggle('active', mode === 'random');
     document.getElementById('modeTarget').classList.toggle('active', mode === 'target');
+    document.getElementById('modeCamera').classList.toggle('active', mode === 'camera');
     document.getElementById('targetInputArea').style.display = mode === 'target' ? 'block' : 'none';
     const subdomainToggle = document.getElementById('subdomainToggleWrapper');
     if (subdomainToggle) {
         subdomainToggle.style.display = mode === 'target' ? 'inline-flex' : 'none';
     }
+    // カメラモード時はカメラ用ポート選択を表示、通常ポート選択を非表示
+    const cameraPortsArea = document.getElementById('cameraPortsArea');
+    if (cameraPortsArea) {
+        cameraPortsArea.style.display = mode === 'camera' ? 'block' : 'none';
+    }
+    // 通常ポート選択とオプションの表示切替
+    const normalControls = document.querySelectorAll('.control-group:not(.camera-ports-area):not(.actions)');
+    normalControls.forEach(el => {
+        // カメラモード時はポート選択と正規表現検索、脆弱性スキャン等のコントロールは非表示
+        // ただしスクリーンショットトグルはそのまま
+    });
 }
 
 // ========== スキャン制御 ==========
 
 async function startScan() {
+    if (currentMode === 'camera') {
+        // カメラスキャンモード
+        const cameraPorts = [];
+        document.querySelectorAll('.cam-port:checked').forEach(cb => {
+            cameraPorts.push(parseInt(cb.value));
+        });
+        if (cameraPorts.length === 0) {
+            alert('少なくとも1つのカメラ用ポートを選択してください');
+            return;
+        }
+        const takeScreenshots = document.getElementById('takeScreenshots').checked;
+        try {
+            const response = await fetch('/api/scan/camera', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ports: cameraPorts,
+                    take_screenshots: takeScreenshots
+                })
+            });
+            if (response.ok) {
+                isScanning = true;
+                scanStartTime = Date.now();
+                updateUIForScanning(true);
+                startElapsedTimer();
+            } else {
+                const error = await response.json();
+                alert(error.error || 'カメラスキャン開始に失敗しました');
+            }
+        } catch (e) {
+            alert('サーバーに接続できません');
+        }
+        return;
+    }
+
     const ports = [];
     if (document.getElementById('port80').checked) ports.push(80);
     if (document.getElementById('port443').checked) ports.push(443);
@@ -194,8 +241,12 @@ function updateUIForScanning(scanning) {
     if (scanning) {
         indicator.classList.add('scanning');
         animation.classList.add('active');
-        const modeText = currentMode === 'target' ? '指定IPスキャン中...' : 'ランダムスキャン中...';
-        statusText.textContent = modeText;
+        const modeTexts = {
+            'target': '指定IPスキャン中...',
+            'camera': '📹 カメラスキャン中...',
+            'random': 'ランダムスキャン中...'
+        };
+        statusText.textContent = modeTexts[currentMode] || 'スキャン中...';
     } else {
         indicator.classList.remove('scanning');
         animation.classList.remove('active');
@@ -336,8 +387,15 @@ function createResultRow(r) {
         honeypotBadge = `<div style="color: var(--accent-orange); font-size: 10px; font-weight: bold; margin-bottom: 2px;" title="ハニーポットの疑い">⚠️ 罠サーバー</div>`;
     }
 
+    // カメラ情報バッジ
+    let cameraBadge = '';
+    if (r.camera_vendor) {
+        const confClass = r.camera_confidence === 'high' ? 'camera-high' : r.camera_confidence === 'medium' ? 'camera-medium' : 'camera-low';
+        cameraBadge = `<div class="camera-badge ${confClass}" title="カメラタイプ: ${escapeHtml(r.camera_type || 'IP Camera')}">📹 ${escapeHtml(r.camera_vendor)}</div>`;
+    }
+
     return `
-        <td class="ip-cell">${honeypotBadge}<a href="${url}" target="_blank" rel="noopener">${r.ip}:${r.port}</a></td>
+        <td class="ip-cell">${honeypotBadge}${cameraBadge}<a href="${url}" target="_blank" rel="noopener">${r.ip}:${r.port}</a></td>
         <td>${statusBadge}</td>
         <td class="hostname-col" title="${escapeHtml(r.hostname || '')}">${hostnameHtml}</td>
         <td>${countryHtml}</td>
@@ -525,6 +583,12 @@ function createGalleryCard(r) {
         honeypotBadge = `<span style="color: var(--accent-orange); font-size: 11px; margin-right: 4px;" title="ハニーポットの疑い">⚠️</span>`;
     }
 
+    let cameraBadgeGallery = '';
+    if (r.camera_vendor) {
+        const confClass = r.camera_confidence === 'high' ? 'camera-high' : r.camera_confidence === 'medium' ? 'camera-medium' : 'camera-low';
+        cameraBadgeGallery = `<span class="camera-badge ${confClass}" style="font-size: 10px; margin-right: 4px;">📹 ${escapeHtml(r.camera_vendor)}</span>`;
+    }
+
     return `
         <div class="gallery-card">
             <div class="gallery-card-img">
@@ -533,7 +597,7 @@ function createGalleryCard(r) {
             <div class="gallery-card-content">
                 <div class="gallery-card-header">
                     <a href="${r.protocol}://${r.ip}:${r.port}" target="_blank" class="gallery-card-ip" style="text-decoration:none;">
-                        ${honeypotBadge}${r.ip}:${r.port}
+                        ${honeypotBadge}${cameraBadgeGallery}${r.ip}:${r.port}
                     </a>
                     <span class="status-badge ${statusClass}" style="transform: scale(0.85); transform-origin: right;">${r.status_code}</span>
                 </div>
@@ -848,3 +912,371 @@ async function loadVulnStats() {
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeModal();
 });
+
+// ========== ステルスモード制御 ==========
+
+/**
+ * ステルスモードのON/OFF切替
+ * トグルスイッチ操作時に呼ばれる
+ */
+function toggleStealth() {
+    const enabled = document.getElementById('stealthEnabled').checked;
+    const body = document.getElementById('stealthBody');
+    const dot = document.getElementById('stealthStatusDot');
+    const panel = document.getElementById('stealthPanel');
+
+    body.style.display = enabled ? 'block' : 'none';
+    dot.className = 'stealth-status-dot' + (enabled ? ' stealth-active' : '');
+    dot.title = enabled ? '有効' : '無効';
+    panel.classList.toggle('stealth-enabled', enabled);
+
+    // ON/OFF変更を即座にサーバーに送信
+    applyStealth();
+
+    // ステルスモニターのポーリング連動
+    if (enabled) {
+        // ステルスON → ポーリング開始（設定適用後に少し遅延して検証）
+        setTimeout(() => startStealthMonitorPolling(), 1500);
+    } else {
+        // ステルスOFF → ポーリング停止＋インジケーターリセット
+        stopStealthMonitorPolling();
+        document.querySelectorAll('.stealth-ind').forEach(el => {
+            el.className = 'stealth-ind';
+            const s = el.querySelector('.ind-status');
+            if (s) { s.textContent = '—'; s.className = 'ind-status ind-unknown'; }
+        });
+    }
+}
+
+/**
+ * ステルス設定をサーバーに送信・適用
+ */
+async function applyStealth() {
+    const enabled = document.getElementById('stealthEnabled').checked;
+    const proxyUrl = document.getElementById('stealthProxyUrl').value.trim();
+    const delayMin = parseFloat(document.getElementById('stealthDelayMin').value);
+    const delayMax = parseFloat(document.getElementById('stealthDelayMax').value);
+    const randomizeUA = document.getElementById('stealthRandomizeUA').checked;
+
+    try {
+        const response = await fetch('/api/stealth/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                enabled,
+                proxy_url: proxyUrl,
+                delay_min: delayMin,
+                delay_max: delayMax,
+                randomize_ua: randomizeUA
+            })
+        });
+        if (response.ok) {
+            const status = await response.json();
+            updateStealthUI(status);
+        }
+    } catch (e) {
+        console.error('ステルス設定エラー:', e);
+    }
+}
+
+/**
+ * 遅延レンジスライダーのラベルを更新
+ */
+function updateDelayLabel() {
+    const min = parseFloat(document.getElementById('stealthDelayMin').value);
+    const max = parseFloat(document.getElementById('stealthDelayMax').value);
+    document.getElementById('delayLabel').textContent = `${min.toFixed(1)}s 〜 ${max.toFixed(1)}s`;
+}
+
+/**
+ * ステルスUIの状態をサーバーレスポンスで更新
+ */
+function updateStealthUI(status) {
+    const dot = document.getElementById('stealthStatusDot');
+
+    if (status.enabled) {
+        dot.className = 'stealth-status-dot stealth-active';
+        dot.title = status.proxy_connected ? 'プロキシ接続済み' : '有効（プロキシ未接続）';
+    } else {
+        dot.className = 'stealth-status-dot';
+        dot.title = '無効';
+    }
+}
+
+/**
+ * 起動時にサーバーのステルス設定を取得してUIに反映
+ */
+async function loadStealthStatus() {
+    try {
+        const response = await fetch('/api/stealth/status');
+        if (response.ok) {
+            const status = await response.json();
+            document.getElementById('stealthEnabled').checked = status.enabled;
+            document.getElementById('stealthProxyUrl').value = status.proxy_url;
+            document.getElementById('stealthDelayMin').value = status.delay_min;
+            document.getElementById('stealthDelayMax').value = status.delay_max;
+            document.getElementById('stealthRandomizeUA').checked = status.randomize_ua;
+
+            // UIの表示を更新
+            const body = document.getElementById('stealthBody');
+            const panel = document.getElementById('stealthPanel');
+            body.style.display = status.enabled ? 'block' : 'none';
+            panel.classList.toggle('stealth-enabled', status.enabled);
+            updateStealthUI(status);
+            updateDelayLabel();
+        }
+    } catch (e) { }
+}
+
+// ページ読み込み時にステルス設定を取得
+loadStealthStatus();
+
+// ========== ステルス実効性モニター ==========
+
+let stealthVerifyTimer = null;
+
+/**
+ * 「検証」ボタンクリック時に手動で検証を実行
+ */
+async function verifyStealthNow() {
+    const btn = document.getElementById('stealthVerifyBtn');
+    btn.classList.add('verifying');
+    btn.innerHTML = '<span class="verify-spinner">🔄</span> 検証中...';
+
+    try {
+        const response = await fetch('/api/stealth/verify');
+        if (response.ok) {
+            const data = await response.json();
+            updateStealthMonitor(data);
+        }
+    } catch (e) {
+        console.error('ステルス検証エラー:', e);
+    } finally {
+        btn.classList.remove('verifying');
+        btn.innerHTML = '🔍 検証';
+    }
+}
+
+/**
+ * ステルスモニターのインジケーターとフル詳細を更新する
+ */
+function updateStealthMonitor(data) {
+    // --- シンプルインジケーター更新 ---
+
+    // プロキシ接続
+    updateIndicator('indProxy', data.proxy_reachable, '接続OK', '未接続');
+
+    // IP秘匿
+    updateIndicator('indExitIp', data.ip_hidden,
+        data.exit_ip ? data.exit_ip.substring(0, 12) + (data.exit_ip.length > 12 ? '…' : '') : 'OK',
+        '露出'
+    );
+
+    // User-Agent
+    const uaShort = data.current_ua ? data.current_ua.substring(0, 15) + '…' : '—';
+    const indUA = document.getElementById('indUA');
+    if (indUA) {
+        const statusEl = indUA.querySelector('.ind-status');
+        statusEl.textContent = uaShort;
+        statusEl.className = 'ind-status ind-ok';
+        indUA.className = 'stealth-ind ind-state-ok';
+        indUA.title = 'User-Agent: ' + (data.current_ua || '—');
+    }
+
+    // リクエスト遅延
+    const indDelay = document.getElementById('indDelay');
+    if (indDelay) {
+        const statusEl = indDelay.querySelector('.ind-status');
+        statusEl.textContent = data.delay_range || '—';
+        statusEl.className = 'ind-status ind-ok';
+        indDelay.className = 'stealth-ind ind-state-ok';
+    }
+
+    // DNS保護
+    updateIndicator('indDNS', data.dns_protected, '有効', '無効');
+
+    // --- フル詳細パネル更新 ---
+    setText('detailProxy', data.proxy_reachable ? '✅ 接続成功' : '❌ 未接続');
+    setColor('detailProxy', data.proxy_reachable);
+
+    setText('detailExitIp', data.exit_ip || '取得失敗');
+    setColor('detailExitIp', !!data.exit_ip);
+
+    setText('detailDirectIp', data.direct_ip || '取得失敗');
+
+    setText('detailUA', data.current_ua || '—');
+
+    setText('detailDelay', data.delay_range || '—');
+
+    setText('detailDNS', data.dns_protected ? '✅ 有効（rdns=True）' : '❌ 無効');
+    setColor('detailDNS', data.dns_protected);
+
+    // 検証時刻
+    if (data.checked_at) {
+        const t = new Date(data.checked_at);
+        setText('detailCheckedAt', t.toLocaleTimeString('ja-JP'));
+    }
+
+    // エラー表示
+    const errorEl = document.getElementById('monitorError');
+    if (data.error) {
+        errorEl.style.display = 'block';
+        errorEl.textContent = '⚠️ ' + data.error;
+    } else {
+        errorEl.style.display = 'none';
+    }
+}
+
+/**
+ * 個別インジケーターを更新するヘルパー関数
+ */
+function updateIndicator(id, isOk, okText, failText) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const statusEl = el.querySelector('.ind-status');
+    if (isOk) {
+        statusEl.textContent = okText;
+        statusEl.className = 'ind-status ind-ok';
+        el.className = 'stealth-ind ind-state-ok';
+    } else {
+        statusEl.textContent = failText;
+        statusEl.className = 'ind-status ind-fail';
+        el.className = 'stealth-ind ind-state-fail';
+    }
+}
+
+/**
+ * テキスト設定ヘルパー
+ */
+function setText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+}
+
+/**
+ * 色設定ヘルパー（OK=緑 / NG=赤）
+ */
+function setColor(id, isOk) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.style.color = isOk ? 'var(--accent-primary)' : 'var(--accent-red)';
+    }
+}
+
+/**
+ * フル詳細パネルの表示/非表示を切り替える
+ */
+function toggleStealthMonitorDetail() {
+    const detail = document.getElementById('stealthMonitorDetail');
+    if (detail) {
+        detail.style.display = detail.style.display === 'none' ? 'flex' : 'none';
+    }
+}
+
+/**
+ * ステルスモード有効時に自動ポーリングを開始（30秒間隔）
+ */
+function startStealthMonitorPolling() {
+    stopStealthMonitorPolling();
+    // 初回検証
+    verifyStealthNow();
+    // 30秒ごとにポーリング
+    stealthVerifyTimer = setInterval(verifyStealthNow, 30000);
+}
+
+/**
+ * ポーリングを停止する
+ */
+function stopStealthMonitorPolling() {
+    if (stealthVerifyTimer) {
+        clearInterval(stealthVerifyTimer);
+        stealthVerifyTimer = null;
+    }
+}
+
+// ========== テーマ切り替え（ダークモード/ライトモード） ==========
+
+/**
+ * テーマの初期化（ページ読み込み時に呼ばれる）
+ * localStorageに保存されたテーマを復元するか、デフォルト（dark）を適用
+ */
+function initTheme() {
+    const savedTheme = localStorage.getItem('ipscan-theme') || 'dark';
+    applyTheme(savedTheme, false); // 初回はアニメーションなし
+}
+
+/**
+ * テーマのトグル（ボタンクリック時に呼ばれる）
+ */
+function toggleTheme() {
+    const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    applyTheme(newTheme, true); // アニメーションあり
+}
+
+/**
+ * テーマを実際に適用する
+ * @param {string} theme - 'dark' または 'light'
+ * @param {boolean} animate - トランジションアニメーションを有効にするか
+ */
+function applyTheme(theme, animate) {
+    const html = document.documentElement;
+
+    // アニメーション有効時はトランジションクラスを付与
+    if (animate) {
+        html.classList.add('theme-transitioning');
+        setTimeout(() => {
+            html.classList.remove('theme-transitioning');
+        }, 500);
+    }
+
+    // data-theme属性を設定
+    html.setAttribute('data-theme', theme);
+
+    // アイコンを更新（ダーク→月、ライト→太陽）
+    const themeIcon = document.getElementById('themeIcon');
+    if (themeIcon) {
+        themeIcon.textContent = theme === 'dark' ? '🌙' : '☀️';
+    }
+
+    // タイトル属性を更新
+    const themeBtn = document.getElementById('themeToggleBtn');
+    if (themeBtn) {
+        themeBtn.title = theme === 'dark' ? 'ライトモードに切り替え' : 'ダークモードに切り替え';
+    }
+
+    // Leafletマップのタイルレイヤーをテーマに合わせて切り替え
+    updateMapTileLayer(theme);
+
+    // localStorageに保存
+    localStorage.setItem('ipscan-theme', theme);
+}
+
+/**
+ * Leafletマップのタイルレイヤーをテーマに応じて切り替え
+ * @param {string} theme - 'dark' または 'light'
+ */
+let currentTileLayer = null;
+
+function updateMapTileLayer(theme) {
+    if (!threatMap) return;
+
+    // 既存タイルレイヤーを削除
+    if (currentTileLayer) {
+        threatMap.removeLayer(currentTileLayer);
+    }
+
+    // テーマに応じたタイルURLを選択
+    const tileUrl = theme === 'light'
+        ? 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+        : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+
+    currentTileLayer = L.tileLayer(tileUrl, {
+        attribution: '&copy; CARTO',
+        subdomains: 'abcd',
+        maxZoom: 20
+    }).addTo(threatMap);
+}
+
+// ページ読み込み時にテーマを初期化
+initTheme();

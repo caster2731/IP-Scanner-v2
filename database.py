@@ -42,6 +42,9 @@ async def init_db():
                 tech_stack TEXT,
                 cve_list TEXT,
                 is_honeypot BOOLEAN DEFAULT 0,
+                camera_vendor TEXT,
+                camera_type TEXT,
+                camera_confidence TEXT,
                 scanned_at TEXT NOT NULL
             )
         """)
@@ -101,6 +104,18 @@ async def init_db():
             await db.execute("ALTER TABLE scan_results ADD COLUMN is_honeypot BOOLEAN DEFAULT 0")
         except Exception:
             pass
+        try:
+            await db.execute("ALTER TABLE scan_results ADD COLUMN camera_vendor TEXT")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE scan_results ADD COLUMN camera_type TEXT")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE scan_results ADD COLUMN camera_confidence TEXT")
+        except Exception:
+            pass
 
         await db.commit()
 
@@ -114,8 +129,9 @@ async def save_result(result: dict) -> int:
              ssl_issuer, ssl_expiry, ssl_domain, screenshot_path, 
              response_time_ms, headers, vulnerabilities, vuln_count, 
              vuln_max_risk, hostname, country, country_code, tech_stack,
-             latitude, longitude, cve_list, is_honeypot, scanned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             latitude, longitude, cve_list, is_honeypot,
+             camera_vendor, camera_type, camera_confidence, scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             result.get("ip"),
             result.get("port"),
@@ -140,6 +156,9 @@ async def save_result(result: dict) -> int:
             result.get("longitude"),
             result.get("cve_list"),
             result.get("is_honeypot", False),
+            result.get("camera_vendor"),
+            result.get("camera_type"),
+            result.get("camera_confidence"),
             result.get("scanned_at", datetime.now().isoformat()),
         ))
         await db.commit()
@@ -174,11 +193,11 @@ async def get_results(limit: int | None = 100, offset: int = 0,
                 query += " AND vuln_max_risk = ?"
                 params.append(risk_filter)
 
-        # テキスト検索（IP、タイトル、サーバー）
+        # テキスト検索（IP、タイトル、サーバー、カメラベンダー等）
         if search:
-            query += " AND (ip LIKE ? OR title LIKE ? OR server LIKE ? OR hostname LIKE ? OR country LIKE ?)"
+            query += " AND (ip LIKE ? OR title LIKE ? OR server LIKE ? OR hostname LIKE ? OR country LIKE ? OR camera_vendor LIKE ?)"
             search_term = f"%{search}%"
-            params.extend([search_term, search_term, search_term, search_term, search_term])
+            params.extend([search_term, search_term, search_term, search_term, search_term, search_term])
 
         query += " ORDER BY scanned_at DESC"
         

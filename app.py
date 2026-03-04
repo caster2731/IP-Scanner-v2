@@ -21,11 +21,13 @@ if sys.platform == 'win32':
 
 from database import init_db, get_results, get_stats, clear_results, get_result_by_id
 from scanner import (
-    scan_state, scan_worker, scan_target_worker, parse_target_ips,
-    ws_connections, reset_scan_state
+    scan_state, scan_worker, scan_target_worker, scan_camera_worker,
+    parse_target_ips, ws_connections, reset_scan_state
 )
+from camera_scanner import CAMERA_PORTS
 from screenshot import init_screenshot_dir, SCREENSHOT_DIR
 from report_generator import generate_pdf_report
+from stealth_config import update_stealth_config, get_stealth_status, verify_stealth_connection
 
 
 # ========== ライフサイクル管理 ==========
@@ -76,6 +78,21 @@ class TargetScanRequest(BaseModel):
     enumerate_subdomains: bool = False
 
 
+class CameraScanRequest(BaseModel):
+    """カメラスキャンリクエスト"""
+    ports: list[int] = CAMERA_PORTS  # デフォルトはカメラ用ポート全部
+    take_screenshots: bool = True
+
+
+class StealthConfigRequest(BaseModel):
+    """ステルスモード設定リクエスト"""
+    enabled: bool = False
+    proxy_url: str = "socks5://127.0.0.1:9050"
+    delay_min: float = 0.1
+    delay_max: float = 2.0
+    randomize_ua: bool = True
+
+
 # ========== ページ配信 ==========
 
 @app.get("/")
@@ -85,6 +102,30 @@ async def index():
 
 
 # ========== REST API ==========
+
+# --- ステルスモードAPI ---
+
+@app.get("/api/stealth/status")
+async def stealth_status():
+    """ステルスモードの現在の設定を取得"""
+    return get_stealth_status()
+
+
+@app.post("/api/stealth/config")
+async def configure_stealth(request: StealthConfigRequest):
+    """ステルスモードの設定を変更"""
+    update_stealth_config(request.model_dump())
+    return get_stealth_status()
+
+
+@app.get("/api/stealth/verify")
+async def stealth_verify():
+    """ステルスモードの実効性を検証する（出口IPチェック等）"""
+    result = await verify_stealth_connection()
+    return result
+
+
+# --- スキャンAPI ---
 
 @app.post("/api/scan/start")
 async def start_scan(request: ScanStartRequest):
@@ -114,6 +155,42 @@ async def start_scan(request: ScanStartRequest):
     ))
 
     return {"status": "started", "mode": "random", "ports": valid_ports}
+
+
+@app.post("/api/scan/camera")
+async def start_camera_scan(request: CameraScanRequest):
+    """カメラスキャンを開始する（ランダムIPでカメラ用ポートを探索）"""
+    if scan_state["running"]:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "スキャンは既に実行中です"}
+        )
+
+    # カメラ用ポートのみ許可
+    valid_ports = [p for p in request.ports if p in CAMERA_PORTS]
+    if not valid_ports:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "有効なカメラ用ポートを指定してください"}
+        )
+
+    reset_scan_state()
+    scan_state["running"] = True
+    scan_state["mode"] = "camera"
+
+    import time
+    scan_state["start_time"] = time.time()
+
+    asyncio.create_task(scan_camera_worker(
+        valid_ports, request.take_screenshots
+    ))
+
+    return {
+        "status": "started",
+        "mode": "camera",
+        "ports": valid_ports,
+        "port_count": len(valid_ports),
+    }
 
 
 @app.post("/api/scan/target")

@@ -5,3 +5,5 @@ aiosqlite
 playwright
 beautifulsoup4
 jinja2
+aiohttp-socks
+python-socks[asyncio]

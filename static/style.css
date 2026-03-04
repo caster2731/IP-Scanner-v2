@@ -43,6 +43,132 @@
     --radius-lg: 16px;
 }
 
+/* === ライトモード用CSS変数 === */
+[data-theme="light"] {
+    --bg-primary: #f0f2f5;
+    --bg-secondary: #ffffff;
+    --bg-card: rgba(255, 255, 255, 0.85);
+    --bg-card-hover: rgba(255, 255, 255, 0.95);
+    --bg-input: rgba(241, 245, 249, 0.9);
+
+    --accent-primary: #059669;
+    --accent-secondary: #047857;
+    --accent-glow: rgba(5, 150, 105, 0.12);
+    --accent-cyan: #0891b2;
+    --accent-blue: #2563eb;
+    --accent-purple: #7c3aed;
+    --accent-red: #dc2626;
+    --accent-orange: #ea580c;
+    --accent-yellow: #ca8a04;
+
+    --risk-critical: #b91c1c;
+    --risk-high: #dc2626;
+    --risk-medium: #d97706;
+    --risk-low: #2563eb;
+    --risk-info: #475569;
+
+    --text-primary: #1e293b;
+    --text-secondary: #475569;
+    --text-muted: #94a3b8;
+
+    --border-color: rgba(5, 150, 105, 0.2);
+    --border-subtle: rgba(148, 163, 184, 0.25);
+}
+
+/* ライトモード：グリッド背景パターン */
+[data-theme="light"] body::before {
+    background-image:
+        linear-gradient(rgba(5, 150, 105, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(5, 150, 105, 0.04) 1px, transparent 1px);
+}
+
+/* ライトモード：ヘッダー */
+[data-theme="light"] .header {
+    background: rgba(255, 255, 255, 0.9);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+/* ライトモード：テーブル行ホバー */
+[data-theme="light"] .results-table tbody tr:hover {
+    background: rgba(5, 150, 105, 0.05);
+}
+
+/* ライトモード：モーダルオーバーレイ */
+[data-theme="light"] .modal-overlay {
+    background: rgba(0, 0, 0, 0.4);
+}
+
+/* ライトモード：スクロールバー */
+[data-theme="light"] ::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+/* ライトモード：セレクトボックスのドロップダウン */
+[data-theme="light"] .filter-select option {
+    background: #ffffff;
+    color: #1e293b;
+}
+
+/* ライトモード：Leafletマップ */
+[data-theme="light"] .leaflet-container {
+    background: #e2e8f0 !important;
+}
+
+/* ライトモード：スタートボタンのテキストを読みやすく */
+[data-theme="light"] .btn-start {
+    color: #ffffff;
+}
+
+/* ライトモード：行挿入アニメーション */
+[data-theme="light"] .new-row {
+    --accent-glow: rgba(5, 150, 105, 0.15);
+}
+
+/* === テーマ切り替えボタン === */
+.theme-toggle-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-size: 20px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.theme-toggle-btn:hover {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    box-shadow: 0 0 15px var(--accent-glow);
+    transform: rotate(15deg);
+}
+
+.theme-toggle-btn .theme-icon {
+    transition: transform 0.4s ease, opacity 0.3s ease;
+}
+
+/* テーマ切り替え時のアニメーション */
+.theme-transitioning * {
+    transition: background-color 0.4s ease,
+        color 0.3s ease,
+        border-color 0.3s ease,
+        box-shadow 0.3s ease !important;
+}
+
 /* === リセット === */
 *,
 *::before,
@@ -1430,4 +1556,443 @@ body::before {
 
 ::-webkit-scrollbar-thumb:hover {
     background: var(--text-secondary);
+}
+
+/* === カメラスキャン関連 === */
+.camera-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    margin-bottom: 2px;
+    line-height: 1.4;
+}
+
+.camera-badge.camera-high {
+    background: rgba(0, 255, 136, 0.15);
+    border: 1px solid rgba(0, 255, 136, 0.4);
+    color: var(--accent-primary);
+}
+
+.camera-badge.camera-medium {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    color: var(--accent-orange);
+}
+
+.camera-badge.camera-low {
+    background: rgba(100, 116, 139, 0.15);
+    border: 1px solid rgba(100, 116, 139, 0.3);
+    color: var(--text-secondary);
+}
+
+/* カメラポート選択のグリッドレイアウト */
+.camera-port-toggles {
+    flex-wrap: wrap;
+    max-width: 100%;
+}
+
+.camera-ports-area {
+    margin-bottom: 16px;
+    padding: 16px;
+    background: rgba(0, 255, 136, 0.03);
+    border: 1px solid rgba(0, 255, 136, 0.1);
+    border-radius: var(--radius-sm);
+}
+
+.camera-ports-area .control-label {
+    color: var(--accent-primary);
+    margin-bottom: 8px;
+}
+
+/* === ステルスモード === */
+.stealth-panel {
+    margin-top: 16px;
+    padding: 16px 20px;
+    background: rgba(139, 92, 246, 0.03);
+    border: 1px solid rgba(139, 92, 246, 0.15);
+    border-radius: var(--radius-sm);
+    transition: all 0.3s ease;
+}
+
+.stealth-panel.stealth-enabled {
+    background: rgba(139, 92, 246, 0.08);
+    border-color: rgba(139, 92, 246, 0.4);
+    box-shadow: 0 0 20px rgba(139, 92, 246, 0.1);
+}
+
+.stealth-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.stealth-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent-purple);
+}
+
+.stealth-icon {
+    font-size: 18px;
+}
+
+/* ステルス状態ドット（緑=有効、灰色=無効） */
+.stealth-status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    margin-left: 4px;
+    transition: all 0.3s;
+}
+
+.stealth-status-dot.stealth-active {
+    background: var(--accent-primary);
+    box-shadow: 0 0 8px var(--accent-primary);
+    animation: blink 1.5s infinite;
+}
+
+/* iOSスタイルのトグルスイッチ */
+.stealth-toggle {
+    position: relative;
+    display: inline-block;
+    width: 48px;
+    height: 26px;
+}
+
+.stealth-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.stealth-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: 26px;
+    transition: all 0.3s;
+}
+
+.stealth-slider:before {
+    position: absolute;
+    content: "";
+    height: 20px;
+    width: 20px;
+    left: 2px;
+    bottom: 2px;
+    background: var(--text-secondary);
+    border-radius: 50%;
+    transition: all 0.3s;
+}
+
+.stealth-toggle input:checked+.stealth-slider {
+    background: rgba(139, 92, 246, 0.3);
+    border-color: var(--accent-purple);
+}
+
+.stealth-toggle input:checked+.stealth-slider:before {
+    transform: translateX(22px);
+    background: var(--accent-purple);
+    box-shadow: 0 0 8px rgba(139, 92, 246, 0.5);
+}
+
+/* ステルス設定ボディ */
+.stealth-body {
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.stealth-option {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.stealth-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.stealth-input {
+    padding: 8px 14px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.stealth-input:focus {
+    border-color: var(--accent-purple);
+    box-shadow: 0 0 8px rgba(139, 92, 246, 0.2);
+}
+
+.stealth-range-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.stealth-range {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    background: var(--bg-input);
+    border-radius: 2px;
+    outline: none;
+}
+
+.stealth-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--accent-purple);
+    cursor: pointer;
+    box-shadow: 0 0 6px rgba(139, 92, 246, 0.4);
+}
+
+.stealth-range::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--accent-purple);
+    cursor: pointer;
+    border: none;
+}
+
+.stealth-delay-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent-purple);
+    white-space: nowrap;
+    min-width: 100px;
+    text-align: right;
+}
+
+.stealth-ua-toggle span {
+    font-family: var(--font-sans) !important;
+}
+
+.stealth-ua-toggle input:checked+span {
+    background: rgba(139, 92, 246, 0.15) !important;
+    border-color: var(--accent-purple) !important;
+    color: var(--accent-purple) !important;
+    box-shadow: 0 0 10px rgba(139, 92, 246, 0.15) !important;
+}
+
+.stealth-apply-btn {
+    align-self: flex-start;
+    background: linear-gradient(135deg, var(--accent-purple), #7c3aed) !important;
+    color: #fff !important;
+    border: none;
+    font-weight: 600;
+    padding: 8px 20px;
+    font-size: 13px;
+}
+
+.stealth-apply-btn:hover {
+    box-shadow: 0 0 20px rgba(139, 92, 246, 0.3);
+    transform: translateY(-1px);
+}
+
+/* === ステルス実効性モニター === */
+.stealth-monitor {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: rgba(6, 182, 212, 0.04);
+    border: 1px solid rgba(6, 182, 212, 0.15);
+    border-radius: var(--radius-sm);
+    transition: all 0.3s ease;
+}
+
+.stealth-monitor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+}
+
+.stealth-monitor-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent-cyan);
+}
+
+.stealth-verify-btn {
+    padding: 4px 12px !important;
+    font-size: 11px !important;
+    background: rgba(6, 182, 212, 0.1) !important;
+    border: 1px solid rgba(6, 182, 212, 0.3) !important;
+    color: var(--accent-cyan) !important;
+    border-radius: 16px !important;
+}
+
+.stealth-verify-btn:hover {
+    background: rgba(6, 182, 212, 0.2) !important;
+    box-shadow: 0 0 10px rgba(6, 182, 212, 0.2);
+}
+
+.stealth-verify-btn.verifying {
+    opacity: 0.6;
+    pointer-events: none;
+    animation: pulse-glow 1s infinite;
+}
+
+/* シンプルインジケーター */
+.stealth-indicators {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+}
+
+.stealth-ind {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: 20px;
+    font-size: 12px;
+    transition: all 0.3s ease;
+}
+
+.ind-icon {
+    font-size: 14px;
+    line-height: 1;
+}
+
+.ind-status {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.ind-unknown {
+    color: var(--text-muted);
+}
+
+.ind-ok {
+    color: var(--accent-primary);
+}
+
+.ind-fail {
+    color: var(--accent-red);
+}
+
+.stealth-ind.ind-state-ok {
+    border-color: rgba(0, 255, 136, 0.3);
+    background: rgba(0, 255, 136, 0.05);
+}
+
+.stealth-ind.ind-state-fail {
+    border-color: rgba(239, 68, 68, 0.3);
+    background: rgba(239, 68, 68, 0.05);
+}
+
+/* フル詳細パネル */
+.stealth-monitor-detail {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px dashed rgba(6, 182, 212, 0.2);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    animation: fadeIn 0.3s ease;
+}
+
+.monitor-detail-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--bg-input);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+}
+
+.monitor-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.monitor-value {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-primary);
+    text-align: right;
+    word-break: break-all;
+    max-width: 60%;
+}
+
+.monitor-ua {
+    font-size: 10px;
+    max-width: 55%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.monitor-error {
+    padding: 8px 12px;
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--accent-red);
+}
+
+/* 検証中スピナー */
+@keyframes spin-verify {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.verify-spinner {
+    display: inline-block;
+    animation: spin-verify 1s linear infinite;
 }
